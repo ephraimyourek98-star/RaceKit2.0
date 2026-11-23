@@ -368,8 +368,8 @@ export function TrainingPlanView({
         {plan.aerobic_deficit_focus}
       </div>
 
-      {/* 7-Day Schedule Grid */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="schedule-grid">
+      {/* 7-Day Schedule Grid + 8th Weekly Analytics Summary Card */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="schedule-grid">
         {plan.schedule.map((w) => {
           const isToday = w.day === todayName;
           const typeMeta = WORKOUT_TYPE_LABEL[w.workout_type] ?? WORKOUT_TYPE_LABEL.easy;
@@ -463,6 +463,71 @@ export function TrainingPlanView({
             </article>
           );
         })}
+
+        {/* 8th Slot: Weekly Summary & Volume Distribution Card */}
+        <div className="flex flex-col justify-between rounded-xl border border-slate-800/80 bg-gradient-to-br from-[#111720] via-[#0E1520] to-[#0A1018] p-5 shadow-md">
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold text-slate-200">Weekly Target Overview</span>
+              <span className="font-mono text-emerald-400 font-bold">Planned Week</span>
+            </div>
+
+            <div className="mt-3">
+              <div className="text-xs text-slate-400">Total Planned Volume</div>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="font-mono text-3xl font-extrabold text-slate-50">
+                  {plan.weekly_mileage}
+                </span>
+                <span className="text-xs font-semibold text-slate-400">miles</span>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-2 border-t border-slate-800/80 pt-3 text-xs">
+              <div className="flex justify-between text-slate-300">
+                <span>Long Run</span>
+                <span className="font-mono font-bold text-indigo-300">
+                  {Math.max(...plan.schedule.map((w) => w.distance_miles))} mi
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Quality Sessions</span>
+                <span className="font-mono font-bold text-sky-400">
+                  {plan.schedule.filter((w) => w.workout_type === 'workout' || w.workout_type === 'race').length} days
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Zone 2 Aerobic Base</span>
+                <span className="font-mono font-bold text-emerald-400">
+                  {plan.schedule.filter((w) => w.workout_type === 'easy' || w.workout_type === 'long_run').length} days
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Rest &amp; Recovery</span>
+                <span className="font-mono font-bold text-amber-300">
+                  {plan.schedule.filter((w) => w.workout_type === 'recovery' || w.workout_type === 'rest').length} days
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 border-t border-slate-800/80 pt-3">
+            <button
+              type="button"
+              onClick={() => {
+                plan.schedule.forEach((w) => {
+                  if (w.distance_miles > 0) {
+                    handleExport(w, 'tcx');
+                  }
+                });
+                onNotify('Exported all scheduled workouts to .TCX.', 'success');
+              }}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-sky-500/15 border border-sky-500/35 py-2 text-xs font-semibold text-sky-300 transition-colors hover:bg-sky-500/25"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download All Workouts (.TCX)
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

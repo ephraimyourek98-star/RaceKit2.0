@@ -167,7 +167,7 @@ export function RacePredictorView({
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {/* ── Section 1: Physiology & VDOT Training Zones ── */}
       <section className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">

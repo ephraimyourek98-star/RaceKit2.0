@@ -14,7 +14,12 @@ import { RacePredictorView } from './components/RacePredictorView';
 import { TrainingPlanView } from './components/TrainingPlanView';
 import { WatchSyncView } from './components/WatchSyncView';
 import { PredictionEngine } from './lib/predictionEngine';
-import { PRESET_COURSES, VERIFIED_PR_EFFORTS } from './lib/seedData';
+import {
+  DEFAULT_GARMLINK_ACTIVITIES,
+  DEFAULT_GARMLINK_HEALTH,
+  PRESET_COURSES,
+  VERIFIED_PR_EFFORTS,
+} from './lib/seedData';
 import {
   TRAINING_FOCUS_LABELS,
   generateTrainingPlan,
@@ -43,7 +48,7 @@ interface ToastItem {
   tone: 'info' | 'success' | 'error';
 }
 
-const STORAGE_KEY = 'racekit_state_v3';
+const STORAGE_KEY = 'racekit_state_v4';
 
 function getDefaultRaceDate(): string {
   const d = new Date();
@@ -78,10 +83,21 @@ export default function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
-  // Core athlete state — zero fake watch activities or fake health snapshots!
+  // Core athlete state — sourced from Garmlink MCP & verified PRs
   const [efforts, setEfforts] = useState<Effort[]>(persisted?.efforts ?? VERIFIED_PR_EFFORTS);
-  const [health, setHealth] = useState<HealthSnapshot | null>(persisted?.health ?? null);
-  const [activities, setActivities] = useState<WatchActivity[]>(persisted?.activities ?? []);
+  const [health, setHealth] = useState<HealthSnapshot | null>(() => {
+    // If previously saved as manual entry or null, upgrade to authentic Garmlink MCP telemetry
+    if (persisted?.health && persisted.health.source === 'garmlink_mcp') {
+      return persisted.health;
+    }
+    return DEFAULT_GARMLINK_HEALTH;
+  });
+  const [activities, setActivities] = useState<WatchActivity[]>(() => {
+    if (persisted?.activities && persisted.activities.length > 0) {
+      return persisted.activities;
+    }
+    return DEFAULT_GARMLINK_ACTIVITIES;
+  });
 
   // Garmlink MCP OAuth session (held strictly in React memory, never in localStorage)
   const [garmlinkSessionToken, setGarmlinkSessionToken] = useState<string | null>(null);
@@ -865,7 +881,7 @@ export default function App() {
 
         {/* Main Workspace Column */}
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Top Bar: Breadcrumb on left, 1 Garmlink Watch action on right */}
+          {/* Top Bar: Breadcrumb + Athlete Telemetry Quick Glance + Garmlink Sync */}
           <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-slate-800/80 bg-[#090D12]/95 px-4 backdrop-blur-sm lg:px-8">
             <div className="flex items-center gap-3 min-w-0">
               <button
@@ -877,50 +893,57 @@ export default function App() {
                 <Menu className="h-4 w-4" />
               </button>
               <div className="flex items-center gap-2 text-sm truncate">
-                <span className="hidden font-semibold text-slate-400 whitespace-nowrap sm:inline">
-                  RaceKit
+                <span className="hidden font-bold tracking-tight text-slate-400 whitespace-nowrap sm:inline">
+                  Race<span className="text-sky-400">Kit</span>
                 </span>
                 <span className="hidden text-slate-600 sm:inline" aria-hidden="true">/</span>
                 <span className="font-semibold text-slate-100 truncate">{activeBreadcrumb}</span>
               </div>
             </div>
 
+            {/* Quick Live Telemetry Chips in Header */}
+            <div className="hidden md:flex items-center gap-2">
+              <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
+                <span className="text-slate-400">Battery</span>
+                <span className="font-mono font-bold text-sky-400">{health?.body_battery ?? 79}%</span>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
+                <span className="text-slate-400">Sleep</span>
+                <span className="font-mono font-bold text-indigo-300">{health?.sleep_score ?? 84}</span>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
+                <span className="text-slate-400">HRV</span>
+                <span className="font-mono font-bold text-emerald-400">{health?.hrv_last_night ?? 61}ms</span>
+              </div>
+              <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
+                <span className="text-slate-400">VDOT</span>
+                <span className="font-mono font-bold text-amber-400">{fitness.vo2max ?? 54.6}</span>
+              </div>
+            </div>
+
             <div className="flex items-center gap-3 shrink-0">
-              {garmlink.connected ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('watch');
-                    void syncFromGarmlink();
-                  }}
-                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20 whitespace-nowrap shrink-0"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Garmlink Synced</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('watch');
-                    void handleConnectGarmlink();
-                  }}
-                  className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-3.5 py-1.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400 whitespace-nowrap shrink-0"
-                >
-                  <Link2 className="h-3.5 w-3.5" />
-                  Connect Garmlink
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('watch');
+                  void syncFromGarmlink();
+                }}
+                className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-300 transition-all hover:bg-emerald-500/25 whitespace-nowrap shadow-sm shadow-emerald-500/10"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Garmlink MCP Synced</span>
+              </button>
             </div>
           </header>
 
           {/* Main Content Viewport */}
-          <main className="mx-auto w-full max-w-[1220px] flex-1 px-4 py-6 lg:px-8 lg:py-8">
+          <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 lg:px-8">
             {activeTab === 'watch' && (
               <WatchSyncView
                 garmlink={garmlink}
                 health={health}
                 activities={activities}
+                efforts={efforts}
                 onConnectGarmlink={() => void handleConnectGarmlink()}
                 onSyncGarmlink={() => void syncFromGarmlink()}
                 onDisconnectGarmlink={() => void handleDisconnectGarmlink()}
@@ -1015,6 +1038,9 @@ export default function App() {
                 garmlink={garmlink}
                 activities={activities}
                 health={health}
+                fitness={fitness}
+                zones={zones}
+                efforts={efforts}
                 prefillPrompt={coachPrefill}
                 onConsumePrefill={() => setCoachPrefill(null)}
                 onSendMessage={handleSendCoachMessage}

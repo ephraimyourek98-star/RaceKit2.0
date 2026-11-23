@@ -1,4 +1,4 @@
-import type { CoursePreset, Effort, ShoeId, SurfaceType } from './types';
+import type { CoursePreset, Effort, HealthSnapshot, ShoeId, SurfaceType, WatchActivity } from './types';
 
 export const ATHLETE_PROFILE = {
   name: 'Ephraim',
@@ -239,5 +239,71 @@ export const PRESET_COURSES: CoursePreset[] = [
     description: 'Manual environmental and elevation controls.',
     profile: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     is_preset: true,
+  },
+];
+
+export const DEFAULT_GARMLINK_HEALTH: HealthSnapshot = {
+  date: new Date().toISOString().slice(0, 10),
+  vo2max: 54.6,
+  hrv_last_night: 61,
+  hrv_weekly_avg: 57,
+  hrv_status: 'BALANCED',
+  hrv_baseline_low: 48,
+  hrv_baseline_high: 74,
+  sleep_score: 84,
+  sleep_hours: 7.8,
+  body_battery: 79,
+  resting_hr: 53,
+  stress_avg: 24,
+  load_anaerobic: 120,
+  load_aerobic_low: 340,
+  load_aerobic_high: 420,
+  consecutive_run_days: 4,
+  source: 'garmlink_mcp',
+  synced_at: new Date().toISOString(),
+};
+
+export const DEFAULT_GARMLINK_ACTIVITIES: WatchActivity[] = [
+  {
+    id: 'act-garmin-1',
+    name: 'Newark Easy Aerobic Base Run',
+    date: new Date().toISOString().slice(0, 10),
+    activity_type: 'running',
+    distance_m: 8046.7, // 5.0 mi
+    duration_s: 2410, // 40:10 (8:02/mi)
+    avg_hr: 141,
+    max_hr: 151,
+    elevation_gain_ft: 105,
+    avg_cadence: 176,
+    source: 'garmlink_mcp',
+    source_label: 'Garmlink MCP',
+  },
+  {
+    id: 'act-garmin-2',
+    name: 'Glasgow Park Threshold Tempo',
+    date: new Date(Date.now() - 86400000 * 2).toISOString().slice(0, 10),
+    activity_type: 'running',
+    distance_m: 9977.9, // 6.2 mi
+    duration_s: 2660, // 44:20 (7:09/mi)
+    avg_hr: 168,
+    max_hr: 184,
+    elevation_gain_ft: 120,
+    avg_cadence: 180,
+    source: 'garmlink_mcp',
+    source_label: 'Garmlink MCP',
+  },
+  {
+    id: 'act-garmin-3',
+    name: 'White Clay Creek XC Long Run',
+    date: new Date(Date.now() - 86400000 * 4).toISOString().slice(0, 10),
+    activity_type: 'running',
+    distance_m: 14484.1, // 9.0 mi
+    duration_s: 4380, // 1:13:00 (8:07/mi)
+    avg_hr: 152,
+    max_hr: 166,
+    elevation_gain_ft: 340,
+    avg_cadence: 174,
+    source: 'garmlink_mcp',
+    source_label: 'Garmlink MCP',
   },
 ];

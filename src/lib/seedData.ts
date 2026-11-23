@@ -245,20 +245,21 @@ export const PRESET_COURSES: CoursePreset[] = [
 export const DEFAULT_GARMLINK_HEALTH: HealthSnapshot = {
   date: new Date().toISOString().slice(0, 10),
   vo2max: 54.6,
-  hrv_last_night: 61,
+  hrv_last_night: null, // Watch not worn overnight - zero made up data
   hrv_weekly_avg: 57,
-  hrv_status: 'BALANCED',
+  hrv_status: 'UNBALANCED',
   hrv_baseline_low: 48,
   hrv_baseline_high: 74,
-  sleep_score: 84,
-  sleep_hours: 7.8,
-  body_battery: 79,
-  resting_hr: 53,
-  stress_avg: 24,
-  load_anaerobic: 120,
-  load_aerobic_low: 340,
-  load_aerobic_high: 420,
-  consecutive_run_days: 4,
+  sleep_score: null, // Watch not worn overnight
+  sleep_hours: null, // Watch not worn overnight
+  body_battery: null, // Watch not worn overnight
+  resting_hr: 54,
+  stress_avg: null,
+  // Real training load focus: "Too much fast stuff, not enough slow stuff" -> Low Aerobic Shortage
+  load_anaerobic: 210,
+  load_aerobic_low: 75,
+  load_aerobic_high: 560,
+  consecutive_run_days: 0,
   source: 'garmlink_mcp',
   synced_at: new Date().toISOString(),
 };

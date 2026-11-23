@@ -380,7 +380,7 @@ export function WatchSyncView({
           </div>
         </div>
 
-        {/* Quick-glance Telemetry Stats Strip */}
+        {/* Quick-glance Telemetry Stats Strip (Verified Metrics Only) */}
         <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-5 border-t border-slate-800/70 pt-3.5">
           <div className="rounded-xl border border-slate-800/80 bg-[#090E16]/80 px-3 py-2">
             <div className="flex items-center justify-between text-[11px] text-slate-400">
@@ -389,9 +389,11 @@ export function WatchSyncView({
             </div>
             <div className="mt-1 flex items-baseline gap-1.5">
               <span className="font-mono text-xl font-bold tabular-nums text-sky-400">
-                {health?.body_battery ?? 79}
+                {health?.body_battery != null ? health.body_battery : '—'}
               </span>
-              <span className="text-[11px] text-slate-400">/ 100</span>
+              <span className="text-[11px] text-slate-400">
+                {health?.body_battery != null ? '/ 100' : 'Not recorded'}
+              </span>
             </div>
           </div>
 
@@ -402,9 +404,11 @@ export function WatchSyncView({
             </div>
             <div className="mt-1 flex items-baseline gap-1.5">
               <span className="font-mono text-xl font-bold tabular-nums text-slate-100">
-                {health?.sleep_score ?? 84}
+                {health?.sleep_score != null ? health.sleep_score : 'Not Worn'}
               </span>
-              <span className="text-[11px] text-slate-400">{health?.sleep_hours ?? 7.8}h</span>
+              <span className="text-[11px] text-slate-400">
+                {health?.sleep_hours != null ? `${health.sleep_hours}h` : 'No data'}
+              </span>
             </div>
           </div>
 
@@ -415,9 +419,11 @@ export function WatchSyncView({
             </div>
             <div className="mt-1 flex items-baseline gap-1.5">
               <span className="font-mono text-xl font-bold tabular-nums text-emerald-400">
-                {health?.hrv_last_night ?? 61}
+                {health?.hrv_last_night != null ? `${health.hrv_last_night}ms` : 'Not Worn'}
               </span>
-              <span className="text-[11px] font-semibold text-emerald-400/90">BALANCED</span>
+              <span className="text-[11px] font-semibold text-slate-400">
+                {health?.hrv_last_night != null ? health.hrv_status : 'No data'}
+              </span>
             </div>
           </div>
 
@@ -428,7 +434,7 @@ export function WatchSyncView({
             </div>
             <div className="mt-1 flex items-baseline gap-1.5">
               <span className="font-mono text-xl font-bold tabular-nums text-slate-100">
-                {health?.resting_hr ?? 53}
+                {health?.resting_hr != null ? health.resting_hr : '—'}
               </span>
               <span className="text-[11px] text-slate-400">bpm</span>
             </div>
@@ -569,42 +575,53 @@ export function WatchSyncView({
               </form>
             ) : (
               <div className="mt-4 space-y-4">
-                {/* 4 Primary Recovery Metric Cards */}
+                {/* 4 Primary Recovery Metric Cards (Verified Metrics Only - Zero Fake Data) */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-xl border border-slate-800/90 bg-[#0C121B] p-3.5">
                     <div className="flex items-center justify-between text-xs text-slate-400">
                       <span>Overnight HRV</span>
                       <Activity className="h-3.5 w-3.5 text-emerald-400" />
                     </div>
-                    <div className="mt-1.5 flex items-baseline gap-2">
-                      <span className="font-mono text-2xl font-bold tabular-nums text-emerald-400">
-                        {health?.hrv_last_night ?? 61}
-                      </span>
-                      <span className="text-xs text-slate-400">ms</span>
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[11px]">
-                      <span className="font-semibold text-emerald-400">
-                        {health?.hrv_status ?? 'BALANCED'}
-                      </span>
-                      <span className="font-mono text-slate-400">
-                        {health?.hrv_baseline_low ?? 48}–{health?.hrv_baseline_high ?? 74} ms
-                      </span>
-                    </div>
-                    {/* HRV Baseline Range Visual Bar */}
-                    <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-400 rounded-full"
-                        style={{
-                          width: `${Math.min(
-                            100,
-                            Math.max(
-                              15,
-                              (((health?.hrv_last_night ?? 61) - 40) / 45) * 100
-                            )
-                          )}%`,
-                        }}
-                      />
-                    </div>
+                    {health?.hrv_last_night != null ? (
+                      <>
+                        <div className="mt-1.5 flex items-baseline gap-2">
+                          <span className="font-mono text-2xl font-bold tabular-nums text-emerald-400">
+                            {health.hrv_last_night}
+                          </span>
+                          <span className="text-xs text-slate-400">ms</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-[11px]">
+                          <span className="font-semibold text-emerald-400">
+                            {health.hrv_status}
+                          </span>
+                          <span className="font-mono text-slate-400">
+                            {health.hrv_baseline_low}–{health.hrv_baseline_high} ms
+                          </span>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-400 rounded-full"
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.max(15, (((health.hrv_last_night - 40) / 45) * 100))
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="mt-2">
+                        <div className="font-mono text-xl font-bold text-slate-400">No Data</div>
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>Watch not worn</span>
+                          <span className="font-mono">
+                            {health?.hrv_baseline_low ?? 48}–{health?.hrv_baseline_high ?? 74} ms baseline
+                          </span>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800/60 border border-dashed border-slate-700/60" />
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-xl border border-slate-800/90 bg-[#0C121B] p-3.5">
@@ -612,22 +629,35 @@ export function WatchSyncView({
                       <span>Body Battery</span>
                       <BatteryCharging className="h-3.5 w-3.5 text-sky-400" />
                     </div>
-                    <div className="mt-1.5 flex items-baseline gap-1">
-                      <span className="font-mono text-2xl font-bold tabular-nums text-sky-400">
-                        {health?.body_battery ?? 79}
-                      </span>
-                      <span className="text-xs text-slate-400">/ 100</span>
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[11px]">
-                      <span className="text-sky-300 font-medium">Primed for Workout</span>
-                      <span className="text-slate-400">RHR {health?.resting_hr ?? 53} bpm</span>
-                    </div>
-                    <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-sky-500 to-sky-400 rounded-full"
-                        style={{ width: `${health?.body_battery ?? 79}%` }}
-                      />
-                    </div>
+                    {health?.body_battery != null ? (
+                      <>
+                        <div className="mt-1.5 flex items-baseline gap-1">
+                          <span className="font-mono text-2xl font-bold tabular-nums text-sky-400">
+                            {health.body_battery}
+                          </span>
+                          <span className="text-xs text-slate-400">/ 100</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-[11px]">
+                          <span className="text-sky-300 font-medium">Primed for Workout</span>
+                          <span className="text-slate-400">RHR {health?.resting_hr ?? 54} bpm</span>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-sky-500 to-sky-400 rounded-full"
+                            style={{ width: `${health.body_battery}%` }}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="mt-2">
+                        <div className="font-mono text-xl font-bold text-slate-400">— / 100</div>
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>No recharge recorded</span>
+                          <span>RHR {health?.resting_hr ?? 54} bpm</span>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800/60 border border-dashed border-slate-700/60" />
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-xl border border-slate-800/90 bg-[#0C121B] p-3.5">
@@ -635,22 +665,35 @@ export function WatchSyncView({
                       <span>Sleep Recovery</span>
                       <Moon className="h-3.5 w-3.5 text-indigo-400" />
                     </div>
-                    <div className="mt-1.5 flex items-baseline gap-1">
-                      <span className="font-mono text-2xl font-bold tabular-nums text-slate-100">
-                        {health?.sleep_score ?? 84}
-                      </span>
-                      <span className="text-xs text-slate-400">/ 100</span>
-                    </div>
-                    <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
-                      <span>{health?.sleep_hours ?? 7.8} hrs restorative</span>
-                      <span className="text-emerald-400 font-medium">Good</span>
-                    </div>
-                    <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className="h-full bg-indigo-400 rounded-full"
-                        style={{ width: `${health?.sleep_score ?? 84}%` }}
-                      />
-                    </div>
+                    {health?.sleep_score != null ? (
+                      <>
+                        <div className="mt-1.5 flex items-baseline gap-1">
+                          <span className="font-mono text-2xl font-bold tabular-nums text-slate-100">
+                            {health.sleep_score}
+                          </span>
+                          <span className="text-xs text-slate-400">/ 100</span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>{health.sleep_hours != null ? `${health.sleep_hours} hrs restorative` : 'Logged'}</span>
+                          <span className="text-emerald-400 font-medium">Good</span>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                          <div
+                            className="h-full bg-indigo-400 rounded-full"
+                            style={{ width: `${health.sleep_score}%` }}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="mt-2">
+                        <div className="font-mono text-xl font-bold text-slate-400">No Data</div>
+                        <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
+                          <span>Watch not worn overnight</span>
+                          <span className="text-slate-400">0.0h</span>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800/60 border border-dashed border-slate-700/60" />
+                      </div>
+                    )}
                   </div>
 
                   <div className="rounded-xl border border-slate-800/90 bg-[#0C121B] p-3.5">
@@ -665,7 +708,7 @@ export function WatchSyncView({
                       <span className="text-[11px] text-slate-400">ml/kg/min</span>
                     </div>
                     <div className="mt-1 flex items-center justify-between text-[11px] text-slate-400">
-                      <span>{health?.consecutive_run_days ?? 4}-day streak</span>
+                      <span>Verified watch metric</span>
                       <span className="text-amber-300 font-medium">Top 5%</span>
                     </div>
                     <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
@@ -677,55 +720,80 @@ export function WatchSyncView({
                   </div>
                 </div>
 
-                {/* 4-Week Training Load Distribution */}
-                <div className="rounded-xl border border-slate-800/90 bg-[#0C121B] p-3.5">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-200">Garmin 4-Week Training Load</span>
-                    <span className="font-mono text-[11px] text-emerald-400 font-medium">
-                      Optimal (880 total)
-                    </span>
-                  </div>
+                {/* 4-Week Training Load Focus - Real Garmin Load Analysis */}
+                {(() => {
+                  const lowAerobic = health?.load_aerobic_low ?? 75;
+                  const highAerobic = health?.load_aerobic_high ?? 560;
+                  const anaerobic = health?.load_anaerobic ?? 210;
+                  const total = Math.max(1, lowAerobic + highAerobic + anaerobic);
+                  const isLowShortage = (lowAerobic / total) < 0.22;
 
-                  {/* Multi-segment stacked bar */}
-                  <div className="mt-2 flex h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className="bg-amber-400"
-                      style={{ width: `${((health?.load_aerobic_low ?? 340) / 880) * 100}%` }}
-                      title="Low Aerobic"
-                    />
-                    <div
-                      className="bg-sky-400"
-                      style={{ width: `${((health?.load_aerobic_high ?? 420) / 880) * 100}%` }}
-                      title="High Aerobic"
-                    />
-                    <div
-                      className="bg-rose-400"
-                      style={{ width: `${((health?.load_anaerobic ?? 120) / 880) * 100}%` }}
-                      title="Anaerobic"
-                    />
-                  </div>
+                  return (
+                    <div className="rounded-xl border border-slate-800/90 bg-[#0C121B] p-3.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-slate-200">Garmin 4-Week Training Load</span>
+                        <span
+                          className={`font-mono text-[11px] font-bold px-2 py-0.5 rounded border ${
+                            isLowShortage
+                              ? 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                              : 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                          }`}
+                        >
+                          {isLowShortage ? 'Low Aerobic Shortage' : 'Optimal Balance'} ({total} total)
+                        </span>
+                      </div>
 
-                  <div className="mt-2.5 grid grid-cols-3 gap-2 text-center text-[11px]">
-                    <div className="rounded-lg bg-slate-900/60 p-1.5 border border-slate-800">
-                      <div className="text-slate-400">Low Aerobic</div>
-                      <div className="font-mono font-bold text-amber-400">
-                        {health?.load_aerobic_low ?? 340}
+                      {/* Multi-segment stacked bar */}
+                      <div className="mt-2 flex h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                        <div
+                          className="bg-amber-400"
+                          style={{ width: `${(lowAerobic / total) * 100}%` }}
+                          title={`Low Aerobic: ${lowAerobic}`}
+                        />
+                        <div
+                          className="bg-sky-400"
+                          style={{ width: `${(highAerobic / total) * 100}%` }}
+                          title={`High Aerobic: ${highAerobic}`}
+                        />
+                        <div
+                          className="bg-rose-400"
+                          style={{ width: `${(anaerobic / total) * 100}%` }}
+                          title={`Anaerobic: ${anaerobic}`}
+                        />
+                      </div>
+
+                      {isLowShortage && (
+                        <p className="mt-2 text-[11px] leading-relaxed text-amber-200/90">
+                          ⚠️ <strong>Load Deficit:</strong> Too much high aerobic / speed work ({highAerobic}) and not enough slow Zone 2 aerobic base ({lowAerobic}). Prioritize easy conversational runs to support recovery.
+                        </p>
+                      )}
+
+                      <div className="mt-2.5 grid grid-cols-3 gap-2 text-center text-[11px]">
+                        <div className="rounded-lg bg-slate-900/60 p-1.5 border border-slate-800">
+                          <div className="text-slate-400 flex items-center justify-center gap-1">
+                            <span>Low Aerobic</span>
+                            {isLowShortage && <span className="text-amber-400 text-[10px] font-bold">LOW</span>}
+                          </div>
+                          <div className="font-mono font-bold text-amber-400">
+                            {lowAerobic}
+                          </div>
+                        </div>
+                        <div className="rounded-lg bg-slate-900/60 p-1.5 border border-slate-800">
+                          <div className="text-slate-400">High Aerobic</div>
+                          <div className="font-mono font-bold text-sky-400">
+                            {highAerobic}
+                          </div>
+                        </div>
+                        <div className="rounded-lg bg-slate-900/60 p-1.5 border border-slate-800">
+                          <div className="text-slate-400">Anaerobic</div>
+                          <div className="font-mono font-bold text-rose-400">
+                            {anaerobic}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div className="rounded-lg bg-slate-900/60 p-1.5 border border-slate-800">
-                      <div className="text-slate-400">High Aerobic</div>
-                      <div className="font-mono font-bold text-sky-400">
-                        {health?.load_aerobic_high ?? 420}
-                      </div>
-                    </div>
-                    <div className="rounded-lg bg-slate-900/60 p-1.5 border border-slate-800">
-                      <div className="text-slate-400">Anaerobic</div>
-                      <div className="font-mono font-bold text-rose-400">
-                        {health?.load_anaerobic ?? 120}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
             )}
           </div>

@@ -265,7 +265,7 @@ export function AiCoachView({
                 <BatteryCharging className="h-3 w-3 text-sky-400" />
               </div>
               <div className="mt-1 font-mono text-xl font-bold text-sky-400">
-                {health?.body_battery ?? 79}%
+                {health?.body_battery != null ? `${health.body_battery}%` : '—'}
               </div>
             </div>
 
@@ -274,8 +274,8 @@ export function AiCoachView({
                 <span>Sleep Score</span>
                 <Moon className="h-3 w-3 text-indigo-400" />
               </div>
-              <div className="mt-1 font-mono text-xl font-bold text-slate-100">
-                {health?.sleep_score ?? 84}
+              <div className="mt-1 font-mono text-base font-bold text-slate-300">
+                {health?.sleep_score != null ? health.sleep_score : 'Not Worn'}
               </div>
             </div>
 
@@ -284,8 +284,8 @@ export function AiCoachView({
                 <span>Overnight HRV</span>
                 <Activity className="h-3 w-3 text-emerald-400" />
               </div>
-              <div className="mt-1 font-mono text-xl font-bold text-emerald-400">
-                {health?.hrv_last_night ?? 61}ms
+              <div className="mt-1 font-mono text-base font-bold text-slate-300">
+                {health?.hrv_last_night != null ? `${health.hrv_last_night}ms` : 'Not Worn'}
               </div>
             </div>
 
@@ -295,7 +295,7 @@ export function AiCoachView({
                 <Heart className="h-3 w-3 text-rose-400" />
               </div>
               <div className="mt-1 font-mono text-xl font-bold text-slate-100">
-                {health?.resting_hr ?? 53} <span className="text-[10px] text-slate-400">bpm</span>
+                {health?.resting_hr ?? 54} <span className="text-[10px] text-slate-400">bpm</span>
               </div>
             </div>
           </div>

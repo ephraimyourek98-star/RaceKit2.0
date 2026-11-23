@@ -48,7 +48,7 @@ interface ToastItem {
   tone: 'info' | 'success' | 'error';
 }
 
-const STORAGE_KEY = 'racekit_state_v4';
+const STORAGE_KEY = 'racekit_state_v5';
 
 function getDefaultRaceDate(): string {
   const d = new Date();
@@ -197,17 +197,20 @@ export default function App() {
     }
   }, [health, efforts, activities, planFocus, aiGeneratedPlan, targetRace, adaptedDays, raceDate, raceTime]);
 
-  // Keep readiness condition fields synced with real health snapshot
+  // Keep readiness condition fields synced with real health snapshot (zero made-up metrics)
   useEffect(() => {
-    if (!health) {
+    const sleepVal = health?.sleep_score;
+    const hrvVal = health?.hrv_last_night;
+    if (!health || sleepVal == null || hrvVal == null) {
+      // Watch was not worn overnight — disable readiness derating rather than inventing metrics
       setConditions((prev) => ({ ...prev, use_readiness: false }));
       return;
     }
     setConditions((prev) => ({
       ...prev,
       hrv_status: health.hrv_status,
-      sleep_score: health.sleep_score ?? 80,
-      body_battery: health.body_battery ?? 75,
+      sleep_score: sleepVal,
+      body_battery: health.body_battery ?? 50,
     }));
   }, [health]);
 
@@ -901,19 +904,25 @@ export default function App() {
               </div>
             </div>
 
-            {/* Quick Live Telemetry Chips in Header */}
+            {/* Quick Live Telemetry Chips in Header (Verified Metrics Only) */}
             <div className="hidden md:flex items-center gap-2">
               <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
                 <span className="text-slate-400">Battery</span>
-                <span className="font-mono font-bold text-sky-400">{health?.body_battery ?? 79}%</span>
+                <span className="font-mono font-bold text-sky-400">
+                  {health?.body_battery != null ? `${health.body_battery}%` : '—'}
+                </span>
               </div>
               <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
                 <span className="text-slate-400">Sleep</span>
-                <span className="font-mono font-bold text-indigo-300">{health?.sleep_score ?? 84}</span>
+                <span className="font-mono font-semibold text-slate-400">
+                  {health?.sleep_score != null ? `${health.sleep_score}/100` : 'Not Worn'}
+                </span>
               </div>
               <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
                 <span className="text-slate-400">HRV</span>
-                <span className="font-mono font-bold text-emerald-400">{health?.hrv_last_night ?? 61}ms</span>
+                <span className="font-mono font-semibold text-slate-400">
+                  {health?.hrv_last_night != null ? `${health.hrv_last_night}ms` : 'Not Worn'}
+                </span>
               </div>
               <div className="flex items-center gap-1.5 rounded-full border border-slate-800 bg-[#0C121B] px-2.5 py-1 text-[11px]">
                 <span className="text-slate-400">VDOT</span>

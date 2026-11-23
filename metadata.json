@@ -1,0 +1,6 @@
+{
+  "name": "RaceKit — Watch Telemetry & AI Running Coach",
+  "description": "Real-time BLE watch telemetry, multi-model race prediction engine, and Gemini AI adaptive training coach.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

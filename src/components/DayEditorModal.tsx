@@ -7,6 +7,7 @@ interface DayEditorModalProps {
   isOpen: boolean;
   workout: DailyWorkout | null;
   zones?: TrainingZones | null;
+  availableDays?: readonly string[];
   isCustomized: boolean;
   onClose: () => void;
   onSave: (updated: DailyWorkout) => void;
@@ -96,11 +97,13 @@ export function DayEditorModal({
   isOpen,
   workout,
   zones,
+  availableDays,
   isCustomized,
   onClose,
   onSave,
   onResetDay,
 }: DayEditorModalProps) {
+  const selectableDays = availableDays && availableDays.length > 0 ? availableDays : DAYS_OF_WEEK;
   const [day, setDay] = useState(workout?.day ?? 'Monday');
   const [workoutType, setWorkoutType] = useState<WorkoutType>(workout?.workout_type ?? 'easy');
   const [name, setName] = useState(workout?.name ?? '');
@@ -272,7 +275,7 @@ export function DayEditorModal({
               Target Day of Week
             </label>
             <div className="grid grid-cols-4 sm:grid-cols-7 gap-1">
-              {DAYS_OF_WEEK.map((d) => (
+              {selectableDays.map((d) => (
                 <button
                   key={d}
                   type="button"

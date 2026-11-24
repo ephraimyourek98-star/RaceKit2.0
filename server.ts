@@ -23,8 +23,18 @@ import {
   DEFAULT_GARMLINK_HEALTH,
   VERIFIED_PR_EFFORTS,
 } from './src/lib/seedData';
-import { generateTrainingPlan, raceDistanceMiles } from './src/lib/trainingPlans';
-import type { TrainingFocusId, TrainingZones } from './src/lib/types';
+import {
+  DAYS_OF_WEEK,
+  capRestDays,
+  filterRemainingSchedule,
+  generateTrainingPlan,
+  getRemainingDaysOfWeek,
+  getTodayDayName,
+  normalizeDayName,
+  parseDayTargetedPrompt,
+  raceDistanceMiles,
+} from './src/lib/trainingPlans';
+import type { DailyWorkout, TrainingFocusId, TrainingZones, WorkoutType } from './src/lib/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -404,15 +414,71 @@ interface NormalizedMileage {
   total_miles: number;
 }
 
+function buildSafeZones(zones: unknown): TrainingZones {
+  const z = (zones && typeof zones === 'object' ? zones : {}) as Record<string, any>;
+  const easyZone = z.easy;
+  const easyPaceFormatted =
+    easyZone && easyZone.min_pace && easyZone.max_pace
+      ? `${easyZone.max_pace}–${easyZone.min_pace}/mi`
+      : easyZone?.label ?? '7:40–8:15/mi';
+  return {
+    recovery: z.recovery?.label ? z.recovery : { pace_s: 540, label: '8:45–9:15/mi' },
+    easy: z.easy?.label ? z.easy : { pace_s: 480, label: easyPaceFormatted },
+    marathon: z.marathon?.label ? z.marathon : { pace_s: 420, label: '6:50–7:10/mi' },
+    threshold: z.threshold?.label ? z.threshold : { pace_s: 385, label: '6:20–6:35/mi' },
+    interval: z.interval?.label ? z.interval : { pace_s: 360, label: '5:50–6:05/mi' },
+    repetition: z.repetition?.label ? z.repetition : { pace_s: 330, label: '5:15–5:30/mi' },
+    rep_400m: z.rep_400m ?? '78–82s',
+  };
+}
+
+function normalizeWorkoutTypeAlias(raw: unknown): WorkoutType {
+  const s = String(raw ?? '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+  if (s === 'rest' || s === 'off' || s === 'rest_day') return 'rest';
+  if (s === 'race' || s === 'time_trial') return 'race';
+  if (s === 'long_run' || s === 'long') return 'long_run';
+  if (s === 'recovery' || s === 'shakeout' || s === 'flush') return 'recovery';
+  if (s === 'cross_train' || s === 'cross_training' || s === 'strength' || s === 'mobility') {
+    return 'cross_train';
+  }
+  if (
+    s === 'workout' ||
+    s === 'quality' ||
+    s === 'quality_session' ||
+    s === 'tempo' ||
+    s === 'threshold' ||
+    s === 'interval' ||
+    s === 'intervals' ||
+    s === 'speed' ||
+    s === 'track' ||
+    s === 'hard'
+  ) {
+    return 'workout';
+  }
+  return 'easy';
+}
+
+function coerceMilesNumber(val: unknown): number | null {
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  if (typeof val === 'string') {
+    const m = val.match(/(\d+(?:\.\d+)?)/);
+    if (m) {
+      const n = parseFloat(m[1]);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
 /**
  * Ensures distance_miles strictly equals warmup_miles + main_miles + cooldown_miles.
  */
 function normalizeWorkoutMileage(w: {
   workout_type: string;
-  distance_miles?: number;
-  warmup_miles?: number;
-  main_miles?: number;
-  cooldown_miles?: number;
+  distance_miles?: number | string;
+  warmup_miles?: number | string;
+  main_miles?: number | string;
+  cooldown_miles?: number | string;
   description?: string;
 }): NormalizedMileage {
   const isRest = w.workout_type === 'rest';
@@ -420,13 +486,19 @@ function normalizeWorkoutMileage(w: {
     return { warmup_miles: 0, main_miles: 0, cooldown_miles: 0, total_miles: 0 };
   }
 
-  let wu = typeof w.warmup_miles === 'number' && !isNaN(w.warmup_miles) ? w.warmup_miles : null;
-  let main = typeof w.main_miles === 'number' && !isNaN(w.main_miles) ? w.main_miles : null;
-  let cd = typeof w.cooldown_miles === 'number' && !isNaN(w.cooldown_miles) ? w.cooldown_miles : null;
+  let wu = coerceMilesNumber(w.warmup_miles);
+  let main = coerceMilesNumber(w.main_miles);
+  let cd = coerceMilesNumber(w.cooldown_miles);
+  const rawDist = coerceMilesNumber(w.distance_miles);
+
+  if (w.workout_type === 'cross_train') {
+    const d = rawDist ?? 0;
+    return { warmup_miles: 0, main_miles: d, cooldown_miles: 0, total_miles: Number(d.toFixed(1)) };
+  }
 
   const desc = w.description || '';
   if (wu === null) {
-    const wuMatch = desc.match(/Warmup:\s*([\d.]+)\s*mi/i);
+    const wuMatch = desc.match(/Warm-?up:\s*([\d.]+)\s*mi/i);
     if (wuMatch) wu = parseFloat(wuMatch[1]);
   }
   if (main === null) {
@@ -434,7 +506,7 @@ function normalizeWorkoutMileage(w: {
     if (mainMatch) main = parseFloat(mainMatch[1]);
   }
   if (cd === null) {
-    const cdMatch = desc.match(/Cooldown:\s*([\d.]+)\s*mi/i);
+    const cdMatch = desc.match(/Cool-?down:\s*([\d.]+)\s*mi/i);
     if (cdMatch) cd = parseFloat(cdMatch[1]);
   }
 
@@ -443,23 +515,23 @@ function normalizeWorkoutMileage(w: {
     if (cd === null || cd > 3.0) cd = 1.0;
     if (main === null) {
       // distance_miles may be the race distance alone OR an already-summed total: never add warmup/cooldown twice
-      const d = typeof w.distance_miles === 'number' && w.distance_miles > 0 && w.distance_miles <= 30 ? w.distance_miles : 3.1;
+      const d = rawDist !== null && rawDist > 0 && rawDist <= 30 ? rawDist : 3.1;
       const STANDARD_RACE_MI = [0.5, 1.0, 2.0, 3.1, 6.2, 13.1, 26.2];
       const isBareRaceDistance = STANDARD_RACE_MI.some((r) => Math.abs(d - r) < 0.06);
       main = isBareRaceDistance || d - wu - cd <= 0 ? d : Number((d - wu - cd).toFixed(1));
     }
   } else if (w.workout_type === 'workout') {
     if (wu === null || wu > 3.0) wu = 1.5;
-    if (main === null) main = Math.max(1.5, (w.distance_miles || 4.5) - 2.5);
     if (cd === null || cd > 3.0) cd = 1.0;
+    if (main === null) main = Math.max(1.5, (rawDist ?? 5.5) - wu - cd);
   } else if (w.workout_type === 'easy' || w.workout_type === 'recovery' || w.workout_type === 'long_run') {
     if (wu === null || wu > 2.0) wu = 0.5;
     if (cd === null || cd > 2.0) cd = 0.5;
-    if (main === null) main = Math.max(0.5, (w.distance_miles || 4.0) - 1.0);
+    if (main === null) main = Math.max(0.5, (rawDist ?? 4.0) - wu - cd);
   } else {
     if (wu === null || wu > 2.0) wu = 0;
     if (cd === null || cd > 2.0) cd = 0;
-    if (main === null) main = w.distance_miles || 0;
+    if (main === null) main = rawDist ?? 0;
   }
 
   wu = Number(wu.toFixed(1));
@@ -476,20 +548,29 @@ function normalizeWorkoutMileage(w: {
 }
 
 /**
- * Enforces pre-race taper rules (no hard workouts before a race), auto-rest for low recovery,
- * and strict mileage math.
+ * Enforces pre-race taper rules, advisory recovery guidance (never forced 0 mi rest),
+ * capped auto-rest days (max 1), and strict mileage math, while honoring pinned athlete edits.
  */
 function applyPlanGuardrails(
   schedule: Array<any>,
   health: any,
   targetRace?: { name: string; dist: string; day: string } | null,
-  easyPaceFormatted: string = '7:40–8:15/mi'
+  easyPaceFormatted: string = '7:40–8:15/mi',
+  customizedDays: Record<string, DailyWorkout> = {},
+  todayDayOverride?: string
 ): Array<any> {
   const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-  const todayIdx = new Date().getDay();
-  const todayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][todayIdx];
+  const todayName = normalizeDayName(todayDayOverride || getTodayDayName());
 
-  // 1. Pre-Race Taper Guardrail: 1 day before race MUST NOT be a quality workout
+  const isPinned = (w: any) =>
+    Boolean(
+      w &&
+        (w.is_pinned ||
+          w.user_customized ||
+          customizedDays[normalizeDayName(w.day, '')])
+    );
+
+  // 1. Pre-Race Taper Guardrail: 1 day before race MUST NOT be a quality workout (unless athlete pinned it)
   if (targetRace && targetRace.day) {
     const raceDayNorm = DAYS.find((d) => d.toLowerCase() === targetRace.day.toLowerCase()) ?? 'Thursday';
     const raceIdx = DAYS.indexOf(raceDayNorm);
@@ -500,9 +581,8 @@ function applyPlanGuardrails(
       const dayBeforeName = DAYS[dayBeforeIdx];
       const dayAfterName = DAYS[dayAfterIdx];
 
-      // Day before race MUST be Pre-Race Shakeout (or rest), NEVER a hard workout
-      const dayBeforeW = raceIdx > 0 ? schedule.find((w) => w.day === dayBeforeName) : undefined;
-      if (dayBeforeW) {
+      const dayBeforeW = raceIdx > 0 ? schedule.find((w) => normalizeDayName(w.day, '') === dayBeforeName) : undefined;
+      if (dayBeforeW && !isPinned(dayBeforeW)) {
         dayBeforeW.workout_type = 'easy';
         dayBeforeW.name = 'Pre-Race Shakeout & Strides';
         dayBeforeW.warmup_miles = 0.5;
@@ -516,9 +596,8 @@ function applyPlanGuardrails(
         dayBeforeW.injury_prevention_note = 'Zero straining. Stay bouncy, loose, and mentally primed.';
       }
 
-      // Day after race should be recovery flush or rest
-      const dayAfterW = raceIdx < 6 ? schedule.find((w) => w.day === dayAfterName) : undefined;
-      if (dayAfterW) {
+      const dayAfterW = raceIdx < 6 ? schedule.find((w) => normalizeDayName(w.day, '') === dayAfterName) : undefined;
+      if (dayAfterW && !isPinned(dayAfterW)) {
         dayAfterW.workout_type = 'recovery';
         dayAfterW.name = 'Post-Race Recovery Flush';
         dayAfterW.warmup_miles = 0.5;
@@ -532,9 +611,8 @@ function applyPlanGuardrails(
         dayAfterW.injury_prevention_note = 'Clear metabolites and prioritize protein supercompensation.';
       }
 
-      // Ensure Race Day itself has proper workout_type and mileage including warmup & cooldown
-      const raceW = schedule.find((w) => w.day === raceDayNorm);
-      if (raceW) {
+      const raceW = schedule.find((w) => normalizeDayName(w.day, '') === raceDayNorm);
+      if (raceW && !isPinned(raceW)) {
         const raceDistMi = raceDistanceMiles(targetRace.dist || '5K');
         raceW.workout_type = 'race';
         raceW.name = `${targetRace.name} — ${targetRace.dist} Race Day`;
@@ -547,17 +625,16 @@ function applyPlanGuardrails(
         raceW.description = `• Warmup: 1.5 mi progressive warm-up + dynamic drills + 4x100m strides.\n• Main Set: ${raceDistMi} mi (${targetRace.dist} Race Effort at Goal Pace).\n• Cooldown: 1.0 mi easy flush on soft surface.`;
       }
 
-      // Days after Race Day in the same Mon–Sun week are post-race, never "taper"
       for (let i = raceIdx + 2; i < DAYS.length; i++) {
-        const w = schedule.find((x) => x.day === DAYS[i]);
-        if (w && /taper|pre-?race|shakeout/i.test(String(w.name ?? ''))) {
+        const w = schedule.find((x) => normalizeDayName(x.day, '') === DAYS[i]);
+        if (w && !isPinned(w) && /taper|pre-?race|shakeout/i.test(String(w.name ?? ''))) {
           w.name = w.workout_type === 'rest' ? 'Post-Race Rest & Mobility' : 'Easy Aerobic Re-Entry';
         }
       }
     }
   }
 
-  // 2. Automatic Recovery-First Guardrail for Today
+  // 2. Advisory Recovery Guardrail for Today (never forces 0-mile rest; never overwrites athlete-pinned workouts)
   const isPoorRecovery = Boolean(
     health &&
       (health.hrv_status === 'LOW' ||
@@ -567,10 +644,16 @@ function applyPlanGuardrails(
   );
 
   if (isPoorRecovery) {
-    const todayW = schedule.find((w) => w.day === todayName);
-    // If today is NOT race day and not already rest, adapt quality sessions to easy recovery run rather than forcing 0 miles
+    const todayW = schedule.find((w) => normalizeDayName(w.day, '') === todayName);
     if (todayW && todayW.workout_type !== 'race') {
-      if (todayW.workout_type === 'workout' || todayW.workout_type === 'long_run') {
+      if (isPinned(todayW)) {
+        const note = String(todayW.injury_prevention_note ?? '');
+        if (!note.includes('Advisory:')) {
+          todayW.injury_prevention_note = note
+            ? `${note} (Advisory: HRV ${health.hrv_last_night ?? 'low'} ms is subdued, keep effort controlled.)`
+            : `Advisory: HRV ${health.hrv_last_night ?? 'low'} ms is subdued, keep effort controlled.`;
+        }
+      } else if (todayW.workout_type === 'workout' || todayW.workout_type === 'long_run') {
         todayW.workout_type = 'recovery';
         todayW.name = 'Easy Aerobic Recovery Run (HRV Adaptive)';
         todayW.distance_miles = 3.0;
@@ -591,17 +674,23 @@ function applyPlanGuardrails(
     }
   }
 
-  // Final pass: ensure all workouts have distance_miles strictly equal to warmup + main + cooldown
-  return schedule.map((w) => {
-    const norm = normalizeWorkoutMileage(w);
+  // Final pass: normalize workout_type, cap auto rest days at 1, and ensure distance_miles = warmup + main + cooldown
+  const normalized = schedule.map((w) => {
+    const cleanType = normalizeWorkoutTypeAlias(w.workout_type);
+    const norm = normalizeWorkoutMileage({ ...w, workout_type: cleanType });
     return {
       ...w,
+      day: normalizeDayName(w.day, w.day),
+      workout_type: cleanType,
       warmup_miles: norm.warmup_miles,
       main_miles: norm.main_miles,
       cooldown_miles: norm.cooldown_miles,
       distance_miles: norm.total_miles,
     };
   });
+
+  capRestDays(normalized, 1);
+  return normalized;
 }
 
 /**
@@ -2065,48 +2154,66 @@ app.post('/api/ai/generate-plan', async (req: Request, res: Response) => {
       fitness,
       zones,
       prs,
+      today_day,
+      customized_days,
+      pinned_workouts,
     } = req.body as Record<string, unknown>;
 
-    const zoneObj = (zones as Record<string, { min_pace?: string; max_pace?: string; label?: string }> | undefined) ?? {};
-    const easyZone = zoneObj.easy;
-    const easyPaceFormatted =
-      easyZone && easyZone.min_pace && easyZone.max_pace
-        ? `${easyZone.max_pace}–${easyZone.min_pace}/mi`
-        : easyZone?.label ?? '7:40–8:15/mi';
+    const safeZones = buildSafeZones(zones);
+    const easyPaceFormatted = safeZones.easy.label;
+    const todayDay = normalizeDayName(typeof today_day === 'string' ? today_day : getTodayDayName());
+    const remainingDays = getRemainingDaysOfWeek(todayDay);
 
-    const safeZones: TrainingZones = {
-      recovery: (zones as any)?.recovery?.label ? (zones as any).recovery : { pace_s: 540, label: '8:45–9:15/mi' },
-      easy: (zones as any)?.easy?.label ? (zones as any).easy : { pace_s: 480, label: easyPaceFormatted },
-      marathon: (zones as any)?.marathon?.label ? (zones as any).marathon : { pace_s: 420, label: '6:50–7:10/mi' },
-      threshold: (zones as any)?.threshold?.label ? (zones as any).threshold : { pace_s: 385, label: '6:20–6:35/mi' },
-      interval: (zones as any)?.interval?.label ? (zones as any).interval : { pace_s: 360, label: '5:50–6:05/mi' },
-      repetition: (zones as any)?.repetition?.label ? (zones as any).repetition : { pace_s: 330, label: '5:15–5:30/mi' },
-      rep_400m: (zones as any)?.rep_400m ?? '78–82s',
-    };
+    const customMap: Record<string, DailyWorkout> = {};
+    if (customized_days && typeof customized_days === 'object') {
+      for (const [k, v] of Object.entries(customized_days as Record<string, DailyWorkout>)) {
+        if (v && typeof v === 'object') {
+          const dKey = normalizeDayName(v.day || k, '');
+          if (dKey) {
+            customMap[dKey] = { ...v, day: dKey, is_pinned: true, user_customized: true };
+          }
+        }
+      }
+    }
+    if (Array.isArray(pinned_workouts)) {
+      for (const v of pinned_workouts as DailyWorkout[]) {
+        if (v && typeof v === 'object' && v.day) {
+          const dKey = normalizeDayName(v.day, '');
+          if (dKey) {
+            customMap[dKey] = { ...v, day: dKey, is_pinned: true, user_customized: true };
+          }
+        }
+      }
+    }
+
+    const lockedEntries = remainingDays
+      .filter((d) => Boolean(customMap[d]))
+      .map((d) => customMap[d]);
 
     const systemInstruction = `You are an elite collegiate middle-distance & cross-country running coach inside RaceKit.
-Build a complete, scientifically sound 7-day running training plan (Monday through Sunday) tailored to the athlete's ACTUAL synced Garmin watch data, verified PRs, Critical Speed, and VDOT pace zones.
+Build a scientifically sound running training schedule for the REMAINING days of the current week (${remainingDays.join(', ')}) tailored to the athlete's ACTUAL synced Garmin watch data, verified PRs, Critical Speed, and VDOT pace zones.
 
 Coaching Rules:
+- REMAINING DAYS ONLY: Today is ${todayDay}. ONLY return schedule items for the remaining days from ${todayDay} through Sunday: ${remainingDays.join(', ')}. Do NOT include past days earlier in the week than ${todayDay}.
 - Only reference watch activities or health metrics that are actually present in the context. Never invent past workouts or fake HRV/sleep numbers if watch data has not been synced yet.
 - Respect the athlete's real recent weekly mileage and longest run so volume progression stays safe (avoid sudden >15% weekly spikes).
 - Enforce strict Zone 2 aerobic discipline on easy days (< 145 bpm) to build mitochondrial/capillary base without sympathetic overload.
-- If a target race is specified on a day of the week, build a proper race-week taper around that race day.
-- STRICT EASY / RECOVERY PACE GUARDRAIL: Easy runs, aerobic base runs, recovery runs, and long runs MUST be constrained strictly to the athlete's calculated VDOT Easy pace zone (${easyPaceFormatted} or ~7:30–8:15/mi). NEVER prescribe easy, recovery, or base runs faster than 7:20/mi (e.g. 6:30/mi or 6:45/mi are strictly forbidden for easy runs as that is threshold/tempo pace for this athlete).
-- REST-DAY CAP: Schedule exactly 1 rest day per week by default. Hard maximum of 2. NEVER schedule 3 or more rest days unless the CUSTOM ATHLETE INSTRUCTIONS explicitly ask for that many. Even with low Training Readiness / HRV or a mid-week race, use short Zone 1–2 recovery shakeouts (2–3 mi, workout_type "recovery") instead of extra rest days, and keep total weekly mileage reasonably close to the athlete's recent weekly volume.
-- WORKOUT VARIETY: Do not default to the same two sessions every week. Pick the quality days from this library, choosing different types from each other and suited to the focus: Threshold Cruise Intervals (4–5x1K or 3–4x1 mi @ T); Continuous Tempo Run (15–25 min @ T); VO2max Track Intervals (5x800m, 6x600m, 4x1000m or 8x400m @ I); Speed / Repetitions (10x200m or 6x300m with full recovery); Fartlek (1-2-3-2-1 min ladder or 8x2 min hard / 1 min float); Hill Repeats (6–8x45–60s uphill); Progression Run (easy → steady → threshold finish); Long Run w/ Fast Finish; Easy Aerobic + Strides (4–6x100m); Pre-Race Shakeout + Strides and Post-Race Recovery around any race.
-- Valid workout_type values: EXACTLY one of "easy", "workout", "long_run", "recovery", "rest", "race".
+- If a target race is specified on a remaining day of the week, build a proper race-week taper around that race day.
+- STRICT EASY / RECOVERY PACE GUARDRAIL: Easy runs, aerobic base runs, recovery runs, and long runs MUST be constrained strictly to the athlete's calculated VDOT Easy pace zone (${easyPaceFormatted} or ~7:30–8:15/mi). NEVER prescribe easy, recovery, or base runs faster than 7:20/mi.
+- ZERO FORCED REST DAYS / REST-DAY CAP: Never force a 0.0-mile rest day due to HRV/recovery/readiness, and NEVER schedule 2 or more rest days automatically unless the CUSTOM ATHLETE INSTRUCTIONS explicitly ask for multiple rest days. If recovery is low on today, suggest an easy Zone 1–2 recovery run instead of mandatory rest. Schedule 0 or at most 1 automatic rest day.
+- ATHLETE-PINNED DAYS: If LOCKED ATHLETE CUSTOMIZATIONS exist below, preserve those days exactly as specified by the athlete (do not overwrite them).
+- Valid workout_type values: EXACTLY one of "easy", "workout", "long_run", "recovery", "cross_train", "rest", "race".
 - Provide exact pace ranges from the athlete's VDOT zones, concrete workout steps, heart rate caps, and practical injury-prevention notes.
-- Return exactly 7 items in schedule ordered Monday through Sunday.`;
+- Return items in schedule strictly ordered for ${remainingDays.join(', ')}.`;
 
-    const prompt = `Create a tailored 7-day training plan. Return ONLY a single valid JSON object (no markdown, no other text) with the following exact structure:
+    const prompt = `Create a tailored training schedule for the remaining days of the week (${remainingDays.join(', ')}). Return ONLY a single valid JSON object (no markdown, no other text) with the following exact structure:
 {
   "title": "Title of Plan",
   "target_race": "Target race or goal",
   "aerobic_deficit_focus": "Specific focus on low aerobic shortage",
   "schedule": [
     {
-      "day": "Monday",
+      "day": "${todayDay}",
       "name": "Workout Name",
       "workout_type": "easy",
       "distance_miles": 4.5,
@@ -2118,9 +2225,13 @@ Coaching Rules:
   ]
 }
 
+TODAY'S LOCAL DAY: ${todayDay}
+REMAINING DAYS TO GENERATE: ${remainingDays.join(', ')}
 SELECTED FOCUS: ${String(focus_label ?? focus_id ?? 'Track Mid-Distance')}
 CUSTOM ATHLETE INSTRUCTIONS: ${String(custom_goal ?? 'None provided')}
 TARGET RACE: ${JSON.stringify(target_race ?? null)}
+LOCKED ATHLETE CUSTOMIZATIONS (MUST KEEP EXACTLY AS GIVEN):
+${JSON.stringify(lockedEntries, null, 2)}
 
 ATHLETE FITNESS & VDOT ZONES:
 ${JSON.stringify({ fitness, zones }, null, 2)}
@@ -2137,7 +2248,7 @@ ${JSON.stringify(Array.isArray(activities) ? activities.slice(0, 14) : [], null,
     let rawText = '';
     let usedModel = '';
 
-    // 1. Try Groq FIRST (ultra-fast ~1s generation with llama-3.3-70b-versatile / qwen)
+    // 1. Try Groq FIRST (ultra-fast ~1s generation)
     try {
       const groqRes = await callGroqChat(
         [
@@ -2180,19 +2291,7 @@ ${JSON.stringify(Array.isArray(activities) ? activities.slice(0, 14) : [], null,
       title?: string;
       target_race?: string;
       aerobic_deficit_focus?: string;
-      schedule?: Array<{
-        day: string;
-        name: string;
-        workout_type: 'easy' | 'workout' | 'long_run' | 'recovery' | 'rest' | 'race';
-        distance_miles: number;
-        warmup_miles?: number;
-        main_miles?: number;
-        cooldown_miles?: number;
-        pace_target: string;
-        hr_cap: string;
-        description: string;
-        injury_prevention_note: string;
-      }>;
+      schedule?: Array<any>;
     } | null = null;
 
     if (rawText) {
@@ -2204,29 +2303,68 @@ ${JSON.stringify(Array.isArray(activities) ? activities.slice(0, 14) : [], null,
       }
     }
 
-    // 3. Fall back to local deterministic training plan engine (never throw 429/500/503 to frontend)
-    if (!parsed || !Array.isArray(parsed.schedule) || parsed.schedule.length !== 7) {
-      console.log('[AI Plan] Falling back to deterministic local training plan engine');
-      const safeFocus = (focus_id as TrainingFocusId) || 'track_mid';
-      const fallbackPlan = generateTrainingPlan(
-        safeFocus,
-        safeZones,
-        target_race as { name: string; dist: string; day: string } | null
-      );
+    const safeFocus = (focus_id as TrainingFocusId) || 'track_mid';
+    const baseFallbackPlan = generateTrainingPlan(
+      safeFocus,
+      safeZones,
+      target_race as { name: string; dist: string; day: string } | null
+    );
 
-      const guardedSchedule = applyPlanGuardrails(
-        fallbackPlan.schedule,
+    const assembleRemainingSchedule = (candidateList: any[]): DailyWorkout[] => {
+      const byDay = new Map<string, any>();
+      for (const fallbackItem of baseFallbackPlan.schedule) {
+        const dKey = normalizeDayName(fallbackItem.day, '');
+        if (dKey) byDay.set(dKey, { ...fallbackItem, day: dKey });
+      }
+      for (const item of candidateList) {
+        if (!item || typeof item !== 'object') continue;
+        const dKey = normalizeDayName(item.day, '');
+        if (dKey) {
+          byDay.set(dKey, { ...item, day: dKey });
+        }
+      }
+      // Lock athlete-customized days onto base before guardrails
+      for (const dKey of remainingDays) {
+        if (customMap[dKey]) {
+          byDay.set(dKey, { ...customMap[dKey], day: dKey });
+        }
+      }
+      const remainingList = remainingDays.map((d) => byDay.get(d)).filter(Boolean);
+      const guarded = applyPlanGuardrails(
+        remainingList,
         health,
         target_race as any,
-        easyPaceFormatted
+        easyPaceFormatted,
+        customMap,
+        todayDay
       );
+      // Tag explicit rest days if user asked for 2+ rest days in custom_goal
+      if (/\b(2|two|3|three|4|four)\s+(full\s+|complete\s+)?(rest|off)\s+days?\b/i.test(String(custom_goal ?? ''))) {
+        for (const w of guarded) {
+          if (w.workout_type === 'rest' && !w.adaptation_reason) {
+            w.adaptation_reason = 'Rest day requested by athlete.';
+          }
+        }
+      }
+      capRestDays(guarded, 1);
+      // Strictly preserve pinned athlete days verbatim
+      return guarded.map((w) => {
+        const dKey = normalizeDayName(w.day, w.day);
+        return customMap[dKey] ? { ...customMap[dKey], day: dKey } : w;
+      });
+    };
+
+    // 3. Fall back to local deterministic training plan engine (never throw 429/500/503 to frontend)
+    if (!parsed || !Array.isArray(parsed.schedule) || parsed.schedule.length === 0) {
+      console.log('[AI Plan] Falling back to deterministic local training plan engine (remaining days only)');
+      const guardedSchedule = assembleRemainingSchedule([]);
       const totalWeekly = Number(
-        guardedSchedule.reduce((acc, w) => acc + (w.distance_miles || 0), 0).toFixed(1)
+        guardedSchedule.reduce((acc, w) => acc + (Number(w.distance_miles) || 0), 0).toFixed(1)
       );
 
       res.json({
         plan: {
-          ...fallbackPlan,
+          ...baseFallbackPlan,
           weekly_mileage: totalWeekly,
           schedule: guardedSchedule,
           ai_generated: true,
@@ -2238,13 +2376,11 @@ ${JSON.stringify(Array.isArray(activities) ? activities.slice(0, 14) : [], null,
       return;
     }
 
-    let rawSchedule = (parsed.schedule ?? []).map((w) => {
-      let paceTarget = w.pace_target || '';
+    const sanitizedAiItems = parsed.schedule.map((w) => {
+      const cleanType = normalizeWorkoutTypeAlias(w.workout_type);
+      let paceTarget = String(w.pace_target || '');
       const isBaseOrRecovery =
-        w.workout_type === 'easy' ||
-        w.workout_type === 'recovery' ||
-        w.workout_type === 'long_run';
-      // Sanitize unrealistic fast paces for easy/recovery runs (e.g. 6:xx or faster than 7:20)
+        cleanType === 'easy' || cleanType === 'recovery' || cleanType === 'long_run';
       if (
         isBaseOrRecovery &&
         (/\b6:[0-5][0-9]\b/.test(paceTarget) ||
@@ -2255,41 +2391,25 @@ ${JSON.stringify(Array.isArray(activities) ? activities.slice(0, 14) : [], null,
       }
       return {
         ...w,
+        workout_type: cleanType,
         pace_target: paceTarget,
         ai_generated: true,
       };
     });
 
-    // Enforce pre-race taper rules, auto-rest on poor recovery, and strict mileage summation
-    const guardedSchedule = applyPlanGuardrails(
-      rawSchedule,
-      health,
-      target_race as any,
-      easyPaceFormatted
-    );
-
-    // The client caps automatic rest days at 2/week. If the athlete explicitly asked for 3+ rest days,
-    // tag them as requested so the cap leaves them alone.
-    if (/\b(3|three|4|four)\s+(full\s+|complete\s+)?(rest|off)\s+days?\b/i.test(String(custom_goal ?? ''))) {
-      for (const w of guardedSchedule as Array<{ workout_type: string; adaptation_reason?: string }>) {
-        if (w.workout_type === 'rest' && !w.adaptation_reason) {
-          w.adaptation_reason = 'Rest day requested by athlete.';
-        }
-      }
-    }
-
+    const finalRemainingSchedule = assembleRemainingSchedule(sanitizedAiItems);
     const weeklyMileage = Number(
-      guardedSchedule.reduce((acc, w) => acc + (w.distance_miles || 0), 0).toFixed(1)
+      finalRemainingSchedule.reduce((acc, w) => acc + (Number(w.distance_miles) || 0), 0).toFixed(1)
     );
 
     res.json({
       plan: {
         focus_id: String(focus_id ?? 'track_mid'),
-        title: parsed.title || 'Custom 7-Day Training Plan',
-        target_race: parsed.target_race || 'Season Preparation',
+        title: parsed.title || baseFallbackPlan.title,
+        target_race: parsed.target_race || baseFallbackPlan.target_race,
         weekly_mileage: weeklyMileage,
-        aerobic_deficit_focus: parsed.aerobic_deficit_focus || 'Aerobic base conditioning',
-        schedule: guardedSchedule,
+        aerobic_deficit_focus: parsed.aerobic_deficit_focus || baseFallbackPlan.aerobic_deficit_focus,
+        schedule: finalRemainingSchedule,
         ai_generated: true,
         generated_at: new Date().toISOString(),
         model_used: usedModel || 'local-engine',
@@ -2299,22 +2419,25 @@ ${JSON.stringify(Array.isArray(activities) ? activities.slice(0, 14) : [], null,
   } catch (outerErr) {
     console.error('[AI Plan] Unexpected error, returning deterministic fallback:', outerErr);
     const safeFocus = ((req.body?.focus_id as TrainingFocusId) || 'track_mid');
+    const safeZones = buildSafeZones(req.body?.zones);
+    const todayDay = normalizeDayName(
+      typeof req.body?.today_day === 'string' ? req.body.today_day : getTodayDayName()
+    );
     const fallbackPlan = generateTrainingPlan(
       safeFocus,
-      {
-        recovery: { pace_s: 540, label: '8:45–9:15/mi' },
-        easy: { pace_s: 480, label: '7:40–8:15/mi' },
-        marathon: { pace_s: 420, label: '6:50–7:10/mi' },
-        threshold: { pace_s: 385, label: '6:20–6:35/mi' },
-        interval: { pace_s: 360, label: '5:50–6:05/mi' },
-        repetition: { pace_s: 330, label: '5:15–5:30/mi' },
-        rep_400m: '78–82s',
-      },
+      safeZones,
       (req.body?.target_race as any) ?? null
+    );
+    const remaining = filterRemainingSchedule(fallbackPlan.schedule, todayDay);
+    capRestDays(remaining, 1);
+    const weeklyMileage = Number(
+      remaining.reduce((acc, w) => acc + (Number(w.distance_miles) || 0), 0).toFixed(1)
     );
     res.json({
       plan: {
         ...fallbackPlan,
+        weekly_mileage: weeklyMileage,
+        schedule: remaining,
         ai_generated: true,
         generated_at: new Date().toISOString(),
         model_used: 'local-engine',
@@ -2328,44 +2451,55 @@ ${JSON.stringify(Array.isArray(activities) ? activities.slice(0, 14) : [], null,
 
 app.post('/api/ai/generate-workout', async (req: Request, res: Response) => {
   try {
-    const ai = getGeminiClient();
-    const { day, goal_prompt, activities, health, fitness, zones, current_plan, prs } =
+    const { day, goal_prompt, today_day, health, fitness, zones, current_plan, prs } =
       req.body as Record<string, unknown>;
 
     if (!goal_prompt || typeof goal_prompt !== 'string' || !goal_prompt.trim()) {
-      res.status(400).json({ error: 'Describe the workout you want Gemini to build.' });
+      res.status(400).json({ error: 'Describe the workout you want built for this day.' });
       return;
     }
 
+    const safeZones = buildSafeZones(zones);
+    const requestedDay = normalizeDayName(
+      String(day || today_day || getTodayDayName()),
+      getTodayDayName()
+    );
+
     const systemInstruction = `You are an elite running coach inside RaceKit.
-Create a single, concrete, watch-ready running workout for the requested day based on the athlete's real synced watch data, VDOT pace zones, and Critical Speed.
+Create a single, concrete, watch-ready workout for ${requestedDay} based on the athlete's request, synced watch data, VDOT pace zones, and Critical Speed.
 Never fabricate watch history if activities/health are empty. Include exact warm-up, main set paces, rest intervals, cooldown, HR cap, and an injury-prevention cue.
 
 CRITICAL DIRECTIVE ON USER INTENT:
-If the user's request asks for a RACE, TIME TRIAL, or SPECIFIC WORKOUT (e.g. "run for pie 5k", "3.1 mile race", "5K race", "tempo", "intervals", "long run"):
-1. ALWAYS create that exact requested workout or race.
-2. For races (e.g. "run for pie 5k", "5K race", "3.1 mile race"), workout_type MUST be "race", distance_miles MUST be 3.1 (or requested distance), name MUST reflect the race name (e.g. "Run for Pie 5K — Race Day"), pace_target MUST be the target race pace (e.g. 5:58–6:05/mi), and description MUST include race-day warm-up, race execution, and cooldown.
-3. NEVER override an explicit user-requested future race or workout with a "Recovery Shakeout" or "Easy Run" just because today's HRV is low. Today's recovery metrics apply to today, not future race days!`;
+The athlete is manually modifying ${requestedDay} with explicit instructions:
+1. ALWAYS honor the athlete's requested intensity and category:
+   - "harder workout", "quality session", "tempo", "threshold", "intervals", "track", "speed", "hills", "fartlek" -> workout_type MUST be "workout".
+   - "race", "5K race", "run for pie 5k", "time trial" -> workout_type MUST be "race".
+   - "long run" -> workout_type MUST be "long_run".
+   - "recovery", "shakeout", "flush" -> workout_type MUST be "recovery".
+   - "cross train", "strength", "bike", "cycling", "swim" -> workout_type MUST be "cross_train".
+   - "rest", "day off", "off" -> workout_type MUST be "rest" (distance_miles: 0).
+   - "easy", "base", "Zone 2" -> workout_type MUST be "easy".
+2. NEVER override or downgrade an explicit user-requested quality session, harder workout, long run, or race into a "Recovery Shakeout" or "Rest Day" just because HRV/readiness is subdued. You may mention staying smooth in injury_prevention_note, but MUST fulfill the requested workout_type and distance!`;
 
     const zoneSummary = zones
-      ? `VDOT: ${(fitness as any)?.vo2max ?? 'unknown'} | Easy: ${(zones as any).easy?.label ?? (zones as any).easy ?? '—'} | Threshold: ${(zones as any).threshold?.label ?? (zones as any).threshold ?? '—'} | Interval: ${(zones as any).interval?.label ?? (zones as any).interval ?? '—'}`
-      : 'VDOT: 54.6 | Easy: 7:40–8:15/mi';
+      ? `VDOT: ${(fitness as any)?.vo2max ?? 'unknown'} | Easy: ${safeZones.easy.label} | Threshold: ${safeZones.threshold.label} | Interval: ${safeZones.interval.label}`
+      : 'VDOT: 54.6 | Easy: 7:40–8:15/mi | Threshold: 6:20–6:35/mi';
     const recoverySummary = health
-      ? `HRV: ${(health as any).hrv_last_night ?? 32}ms (${(health as any).hrv_status ?? 'LOW'}), Sleep: ${(health as any).sleep_hours ?? 6.5}h, Battery: ${(health as any).body_battery ?? 55}`
-      : 'HRV: 32ms (LOW), Sleep: 6.5h, Battery: 55';
+      ? `HRV: ${(health as any).hrv_last_night ?? '—'}ms (${(health as any).hrv_status ?? 'BALANCED'}), Sleep: ${(health as any).sleep_hours ?? '—'}h, Battery: ${(health as any).body_battery ?? '—'}`
+      : 'No recovery snapshot synced';
     const targetRaceStr = (current_plan as any)?.target_race?.name
       ? `${(current_plan as any).target_race.name} (${(current_plan as any).target_race.dist}) on ${(current_plan as any).target_race.day}`
       : 'None';
 
-    const prompt = `Build a single watch-ready workout for ${String(day ?? 'Today')}.
+    const prompt = `Build a single watch-ready workout for ${requestedDay}.
 Return ONLY a valid JSON object with keys:
 - "name": short workout title
-- "workout_type": "easy" | "workout" | "long_run" | "recovery" | "rest" | "race"
+- "workout_type": "easy" | "workout" | "long_run" | "recovery" | "cross_train" | "rest" | "race"
 - "warmup_miles": number (e.g. 1.5, in miles not minutes)
-- "main_miles": number (e.g. 3.1, in miles not minutes)
+- "main_miles": number (e.g. 3.0, in miles not minutes)
 - "cooldown_miles": number (e.g. 1.0, in miles not minutes)
-- "distance_miles": number (TOTAL MILES: MUST strictly equal warmup_miles + main_miles + cooldown_miles, e.g. 1.5 + 3.1 + 1.0 = 5.6)
-- "pace_target": string (e.g. "5:58–6:05/mi")
+- "distance_miles": number (TOTAL MILES: MUST strictly equal warmup_miles + main_miles + cooldown_miles, e.g. 1.5 + 3.0 + 1.0 = 5.5)
+- "pace_target": string (e.g. "6:20–6:35/mi")
 - "hr_cap": string (e.g. "< 185 bpm")
 - "description": format as 3 concise structured lines:
   • Warmup: [distance/minutes + dynamic drills]
@@ -2374,19 +2508,17 @@ Return ONLY a valid JSON object with keys:
 - "injury_prevention_note": short recovery or form cue
 - "reason": concise rationale
 
-USER REQUEST: ${goal_prompt.trim()}
+USER REQUEST FOR ${requestedDay}: ${goal_prompt.trim()}
 ATHLETE PACES: ${zoneSummary}
-RECOVERY SNAPSHOT: ${recoverySummary}
+RECOVERY SNAPSHOT (advisory only): ${recoverySummary}
 LIVE GARMIN METRICS:
 ${buildLiveMetricsSummary(health, fitness, prs)}
-TARGET RACE: ${targetRaceStr}
-
-CRITICAL: If the USER REQUEST asks for a race (e.g. "Run for Pie 5K", "5K race", "time trial"), set workout_type to "race", warmup_miles to 1.5, main_miles to the race distance (e.g. 3.1 for a 5K), cooldown_miles to 1.0, and distance_miles to the sum (e.g. 5.6 for 5K race day), name to the race name, and provide race pacing and structured warmup/cooldown. Never substitute a recovery shakeout when the user explicitly requests a race or quality workout!`;
+TARGET RACE: ${targetRaceStr}`;
 
     let responseText = '';
     let usedModel = '';
 
-    // 1. Try Groq FIRST (ultra-fast ~1s generation with llama-3.3-70b-versatile / qwen)
+    // 1. Try Groq FIRST (ultra-fast ~1s generation)
     try {
       const groqRes = await callGroqChat(
         [
@@ -2403,7 +2535,7 @@ CRITICAL: If the USER REQUEST asks for a race (e.g. "Run for Pie 5K", "5K race",
       console.warn('[AI Workout] Primary Groq call failed, trying backup chain:', groqErr);
     }
 
-    // 2. Fall back to Gemini/Gemma models if Groq was unavailable
+    // 2. Fall back to Gemini/Gemma models only if API key exists & Groq was unavailable
     if (!responseText) {
       try {
         const ai = getGeminiClient();
@@ -2421,17 +2553,17 @@ CRITICAL: If the USER REQUEST asks for a race (e.g. "Run for Pie 5K", "5K race",
         responseText = (response.text ?? '').trim();
         usedModel = modelUsed;
       } catch (genErr) {
-        console.warn('[AI Workout] All Gemini/Gemma backup models failed or timed out:', genErr);
+        console.warn('[AI Workout] All Gemini/Gemma backup models failed or unavailable:', genErr);
       }
     }
 
     let parsed: {
       name: string;
-      workout_type: 'easy' | 'workout' | 'long_run' | 'recovery' | 'rest' | 'race';
-      distance_miles?: number;
-      warmup_miles?: number;
-      main_miles?: number;
-      cooldown_miles?: number;
+      workout_type: WorkoutType;
+      distance_miles?: number | string;
+      warmup_miles?: number | string;
+      main_miles?: number | string;
+      cooldown_miles?: number | string;
       pace_target: string;
       hr_cap: string;
       description: string;
@@ -2442,130 +2574,108 @@ CRITICAL: If the USER REQUEST asks for a race (e.g. "Run for Pie 5K", "5K race",
     if (responseText) {
       try {
         const cleaned = extractJsonFromText(responseText);
-        parsed = JSON.parse(cleaned);
+        const rawJson = JSON.parse(cleaned);
+        if (rawJson && rawJson.name) {
+          parsed = {
+            ...rawJson,
+            workout_type: normalizeWorkoutTypeAlias(rawJson.workout_type),
+          };
+        }
       } catch (parseErr) {
-        console.warn('[AI Workout] JSON parse failed, falling back to deterministic engine:', parseErr);
+        console.warn('[AI Workout] JSON parse failed, falling back to smart parser:', parseErr);
       }
     }
 
-    // High quality intelligent fallback if remote AI was unavailable or unparseable
+    const smartParsed = parseDayTargetedPrompt(goal_prompt, requestedDay, safeZones);
+
+    // 3. Deterministic parser fallback (handles "harder workout", "quality session", distances, races, rest, cross-train)
     if (!parsed || !parsed.name || !parsed.workout_type) {
       usedModel = 'local-engine';
-      const lowerReq = goal_prompt.toLowerCase();
-      const isRace = lowerReq.includes('race') || lowerReq.includes('5k') || lowerReq.includes('pie') || lowerReq.includes('time trial');
-      const isWorkout = lowerReq.includes('tempo') || lowerReq.includes('interval') || lowerReq.includes('track') || lowerReq.includes('speed');
-      const isLong = lowerReq.includes('long');
-      const isRest = lowerReq.includes('rest') || lowerReq.includes('off');
-
-      if (isRace) {
-        parsed = {
-          name: lowerReq.includes('pie') ? 'Run for Pie 5K — Race Day' : '5K Race Day Execution',
-          workout_type: 'race',
-          warmup_miles: 1.5,
-          main_miles: 3.1,
-          cooldown_miles: 1.0,
-          distance_miles: 5.6,
-          pace_target: 'Goal Race Pace (5:58–6:05/mi)',
-          hr_cap: 'Race Effort (Max VO2)',
-          description: '• Warmup: 1.5 mi progressive warm-up + dynamic drills + 4x100m strides.\n• Main Set: Race 5K (3.1 mi) at Goal Race Pace (~5:58–6:05/mi).\n• Cooldown: 1.0 mi easy aerobic cooldown flush.',
-          injury_prevention_note: 'Pre-race hydration and dynamic mobility. Double-knot racing shoes.',
-          reason: `Honored athlete request for a race on ${String(day ?? 'Thursday')}.`,
-        };
-      } else if (isWorkout) {
-        parsed = {
-          name: 'Target Quality Session',
-          workout_type: 'workout',
-          warmup_miles: 1.5,
-          main_miles: 3.0,
-          cooldown_miles: 1.0,
-          distance_miles: 5.5,
-          pace_target: 'Threshold / Interval (~6:20–6:45/mi)',
-          hr_cap: '< 185 bpm',
-          description: '• Warmup: 1.5 mi easy aerobic jogging + dynamic leg swings.\n• Main Set: 3 x 1000m at threshold pace with 60s jog recovery + 4x100m strides.\n• Cooldown: 1.0 mi easy flush on soft surface.',
-          injury_prevention_note: 'Controlled turnover; stay relaxed through the shoulders.',
-          reason: `Built targeted quality session for ${String(day ?? 'Tuesday')}.`,
-        };
-      } else if (isLong) {
-        parsed = {
-          name: 'Aerobic Long Run',
-          workout_type: 'long_run',
-          warmup_miles: 0.5,
-          main_miles: 6.0,
-          cooldown_miles: 0.5,
-          distance_miles: 7.0,
-          pace_target: '7:45–8:15/mi',
-          hr_cap: '< 150 bpm',
-          description: '• Warmup: 0.5 mi progressive shuffle into steady Zone 2 rhythm.\n• Main Set: 6.0 mi continuous aerobic endurance running on soft trails.\n• Cooldown: 0.5 mi light walk & hamstring/calf mobility.',
-          injury_prevention_note: 'Hydrate well before and after; avoid pacing surges.',
-          reason: `Scheduled aerobic long run for ${String(day ?? 'Saturday')}.`,
-        };
-      } else if (isRest) {
-        parsed = {
-          name: 'Rest & Mobility Day',
-          workout_type: 'rest',
-          warmup_miles: 0,
-          main_miles: 0,
-          cooldown_miles: 0,
-          distance_miles: 0,
-          pace_target: 'Off',
-          hr_cap: 'Rest',
-          description: '• Warmup: 5 min diaphragmatic breathing.\n• Main Set: 20 min foam rolling IT bands, quads, and calves + light hip mobility.\n• Cooldown: Full recovery hydration and protein supercompensation.',
-          injury_prevention_note: 'Tissue repair and glycogen supercompensation.',
-          reason: `Scheduled rest day for ${String(day ?? 'Monday')}.`,
-        };
-      } else {
-        parsed = {
-          name: 'Zone 2 Aerobic Base Run',
-          workout_type: 'easy',
-          warmup_miles: 0.5,
-          main_miles: 3.0,
-          cooldown_miles: 0.5,
-          distance_miles: 4.0,
-          pace_target: '7:30–8:00/mi',
-          hr_cap: '< 145 bpm',
-          description: '• Warmup: 0.5 mi progressive jog into aerobic pace.\n• Main Set: 3.0 mi conversational Zone 2 flush on grass or soft trail.\n• Cooldown: 0.5 mi walk + light calf stretching.',
-          injury_prevention_note: 'Builds capillary density without musculoskeletal strain.',
-          reason: `Built easy aerobic run for ${String(day ?? 'Wednesday')}.`,
-        };
-      }
+      parsed = {
+        name: smartParsed.name,
+        workout_type: smartParsed.workout_type,
+        warmup_miles: smartParsed.warmup_miles,
+        main_miles: smartParsed.main_miles,
+        cooldown_miles: smartParsed.cooldown_miles,
+        distance_miles: smartParsed.distance_miles,
+        pace_target: smartParsed.pace_target,
+        hr_cap: smartParsed.hr_cap,
+        description: smartParsed.description,
+        injury_prevention_note: smartParsed.injury_prevention_note,
+        reason: smartParsed.reason,
+      };
+    } else if (
+      smartParsed.workout_type === 'workout' &&
+      (parsed.workout_type === 'easy' || parsed.workout_type === 'recovery')
+    ) {
+      // Never let remote LLM silently downgrade an explicit "harder workout" / "quality session" to easy/recovery
+      parsed = {
+        ...parsed,
+        name: smartParsed.name,
+        workout_type: 'workout',
+        warmup_miles: smartParsed.warmup_miles,
+        main_miles: smartParsed.main_miles,
+        cooldown_miles: smartParsed.cooldown_miles,
+        distance_miles: smartParsed.distance_miles,
+        pace_target: smartParsed.pace_target,
+        hr_cap: smartParsed.hr_cap,
+        description: smartParsed.description,
+      };
     }
+
+    // Determine final day: respect explicit day selected in Modify Day dropdown unless prompt named another day
+    const explicitDayMention = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(goal_prompt);
+    const resolvedDay = explicitDayMention ? smartParsed.day : requestedDay;
 
     // Strict mileage normalization: distance_miles MUST equal warmup + main + cooldown
     const norm = normalizeWorkoutMileage(parsed);
 
     res.json({
       workout: {
-        day: String(day ?? 'Thursday'),
-        name: parsed.name,
+        day: resolvedDay,
+        name: String(parsed.name || smartParsed.name),
         workout_type: parsed.workout_type,
         distance_miles: norm.total_miles,
         warmup_miles: norm.warmup_miles,
         main_miles: norm.main_miles,
         cooldown_miles: norm.cooldown_miles,
-        pace_target: parsed.pace_target,
-        hr_cap: parsed.hr_cap,
-        description: parsed.description,
-        injury_prevention_note: parsed.injury_prevention_note,
+        pace_target: String(parsed.pace_target || smartParsed.pace_target),
+        hr_cap: String(parsed.hr_cap || smartParsed.hr_cap),
+        description: String(parsed.description || smartParsed.description),
+        injury_prevention_note: String(parsed.injury_prevention_note || smartParsed.injury_prevention_note),
         ai_generated: true,
-        adaptation_reason: parsed.reason,
+        is_pinned: true,
+        user_customized: true,
+        adaptation_reason: String(parsed.reason || smartParsed.reason),
       },
       model_used: usedModel || 'local-engine',
       source: usedModel === 'local-engine' ? 'local-engine' : undefined,
     });
   } catch (outerErr) {
-    console.error('[AI Workout] Unexpected error, returning deterministic fallback:', outerErr);
+    console.error('[AI Workout] Unexpected error, returning smart deterministic fallback:', outerErr);
+    const reqZones = buildSafeZones(req.body?.zones);
+    const fallbackParsed = parseDayTargetedPrompt(
+      String(req.body?.goal_prompt ?? ''),
+      String(req.body?.day ?? req.body?.today_day ?? getTodayDayName()),
+      reqZones
+    );
     res.json({
       workout: {
-        day: String(req.body?.day ?? 'Thursday'),
-        name: 'Zone 2 Aerobic Base Run',
-        workout_type: 'easy',
-        distance_miles: 4.0,
-        pace_target: '7:40–8:15/mi',
-        hr_cap: '< 145 bpm',
-        description: '• Warmup: 0.5 mi progressive jog.\n• Main Set: 3.0 mi conversational Zone 2 flush.\n• Cooldown: 0.5 mi walk.',
-        injury_prevention_note: 'Aerobic base maintenance.',
+        day: fallbackParsed.day,
+        name: fallbackParsed.name,
+        workout_type: fallbackParsed.workout_type,
+        distance_miles: fallbackParsed.distance_miles,
+        warmup_miles: fallbackParsed.warmup_miles,
+        main_miles: fallbackParsed.main_miles,
+        cooldown_miles: fallbackParsed.cooldown_miles,
+        pace_target: fallbackParsed.pace_target,
+        hr_cap: fallbackParsed.hr_cap,
+        description: fallbackParsed.description,
+        injury_prevention_note: fallbackParsed.injury_prevention_note,
         ai_generated: true,
-        adaptation_reason: 'Deterministic recovery session.',
+        is_pinned: true,
+        user_customized: true,
+        adaptation_reason: fallbackParsed.reason,
       },
       model_used: 'local-engine',
       source: 'local-engine',
@@ -2590,9 +2700,12 @@ const BASE_COACH_TOOLS: FunctionDeclaration[] = [
         name: { type: Type.STRING, description: 'Workout title.' },
         workout_type: {
           type: Type.STRING,
-          enum: ['easy', 'workout', 'long_run', 'recovery', 'rest', 'race'],
+          enum: ['easy', 'workout', 'long_run', 'recovery', 'cross_train', 'rest', 'race'],
         },
         distance_miles: { type: Type.NUMBER, description: 'Total distance in miles.' },
+        warmup_miles: { type: Type.NUMBER, description: 'Warmup distance in miles.' },
+        main_miles: { type: Type.NUMBER, description: 'Main set distance in miles.' },
+        cooldown_miles: { type: Type.NUMBER, description: 'Cooldown distance in miles.' },
         pace_target: { type: Type.STRING, description: 'Target pace band.' },
         hr_cap: { type: Type.STRING, description: 'Heart rate cap string, e.g. < 145 bpm.' },
         description: { type: Type.STRING, description: 'Structured workout details.' },
@@ -2768,15 +2881,14 @@ ${
 1. CASUAL GREETING RULE: If the user sends a greeting (like "hi", "hello", "hey", "good morning"), respond warmly, conversationally, and concisely in 1–2 friendly sentences as their personal running coach (e.g. "${greetingSalutation} Ready to dial in today's training? How are your legs feeling?"). NEVER address the athlete as "Runner" or say "Hey Runner!". DO NOT dump unprompted statistics, metric dumps, or past activity lists on a simple greeting!
 2. STRICT DATA TRUTH: Only reference runs, PRs, and health metrics that are explicitly listed above. Never invent fake past workouts or fake recovery numbers.
 3. PRE-RACE TAPER: 1 day before any race must NEVER be a hard workout (strictly Pre-Race Shakeout 2.0 mi + 4x100m strides or Rest). 1 day after must be a Recovery Flush (2.0 mi) or Rest.
-4. WORKOUT CREATION: Use replace_workout_day or schedule_race_taper whenever the user asks to modify a workout, add a race, or adjust the plan. Ensure race workouts include warmup and cooldown distances in the description and mileage.
+4. WORKOUT CREATION & REMAINING WEEK: Use replace_workout_day or schedule_race_taper whenever the user asks to modify a workout, add a race, switch to cross_train/strength, or adjust the plan. Respect the user's remaining-week schedule (today through Sunday) and NEVER force 0-mile rest days or wipe out custom/pinned athlete edits.
 5. Keep coaching advice sharp, practical, and conversational with exact pace ranges from their VDOT zones.
-6. ADAPTIVE RECOVERY GUIDANCE (ATHLETE WANTS TO RUN):
-- NEVER tell the athlete they "cannot run" or forbid them from running if they want to run today.
+6. ADAPTIVE RECOVERY GUIDANCE (ADVISORY ONLY):
+- NEVER force a 0.0-mile rest day or forbid the athlete from running if they want to run today.
 - When the athlete's Overnight HRV is below baseline or their 7-day average (or recovery markers are subdued):
-  * If the athlete wants to run, GREEN LIGHT THEM for an easy aerobic recovery run or gentle shakeout (e.g. 2.5–4.0 miles at strictly conversational Easy Zone 2 pace, HR cap < 140–145 bpm).
-  * Explain that gentle, low-intensity aerobic running promotes active blood flow, flushes out muscle stiffness, and aids recovery without placing heavy demands on the autonomic nervous system.
-  * Advise modifying or skipping high-intensity track intervals, hard tempo runs, or heavy anaerobic volume—instead directing that energy into an easy aerobic effort.
-  * Offer full rest only as an optional suggestion if they feel fatigued or sluggish, but never mandate 0 miles or say they aren't allowed to run.`;
+  * Offer advisory guidance: suggest keeping intensity controlled (< 140–145 bpm, conversational Zone 1–2) or doing an easy recovery shakeout (2.5–4.0 mi) to promote blood flow without sympathetic strain.
+  * If the athlete explicitly requests a quality workout or race, fulfill their explicit request while offering optional pacing/warmup guidance.
+  * Offer full rest only as an optional choice, never mandatory.`;
 
     const recentHistory = Array.isArray(history) ? history.slice(-8) : [];
     const contents: Array<Record<string, unknown>> = [
@@ -2977,25 +3089,56 @@ ${
           },
         });
         finalReply = `I have locked in **${raceName}** on **Thursday** (5.6 mi total: 1.5 mi warmup + 3.1 mi race + 1.0 mi cooldown) and ensured your pre-race taper is scheduled. Keep Wednesday easy so you toe the line fresh!`;
-      } else if (
-        lower.includes('hrv') ||
-        lower.includes('recovery') ||
-        lower.includes('sleep') ||
-        lower.includes('readiness')
-      ) {
-        if (verifiedHealth) {
-          finalReply = `Your overnight HRV was **${verifiedHealth.hrv_last_night ?? '—'} ms** (${verifiedHealth.hrv_status ?? 'BALANCED'}), sleep duration was **${sleepHoursStr}**, and Body Battery is at **${verifiedHealth.body_battery ?? '—'} / 100**.\n\nKeep easy days truly aerobic (< 145 bpm) to support cellular recovery and tissue repair.`;
-        } else {
-          finalReply = `You haven't synced watch recovery data yet. Connect your Garmin watch via Garmlink on the Watch tab to sync live HRV, sleep, and training status telemetry.`;
-        }
       } else {
-        finalReply = `Hey ${athleteName}! As your RaceKit Coach, I'm here to help optimize your training and race preparation. Let me know if you want to inspect your workouts, schedule a race taper, or check your recovery status!`;
+        const contextToday = normalizeDayName(String(context?.today || getTodayDayName()), getTodayDayName());
+        const contextZones = buildSafeZones(context?.zones);
+        const dayEditParsed = parseDayTargetedPrompt(message, contextToday, contextZones);
+        const isExplicitEditVerb =
+          /\b(change|make|set|replace|update|switch|turn|put|swap|build|modify|create|add|harder|quality|tempo|intervals?|rest day|long run|recovery|cross[- ]?train)\b/i.test(
+            message
+          );
+
+        if (dayEditParsed.isTargeted && isExplicitEditVerb) {
+          clientToolCalls.push({
+            name: 'replace_workout_day',
+            args: {
+              day: dayEditParsed.day,
+              name: dayEditParsed.name,
+              workout_type: dayEditParsed.workout_type,
+              warmup_miles: dayEditParsed.warmup_miles,
+              main_miles: dayEditParsed.main_miles,
+              cooldown_miles: dayEditParsed.cooldown_miles,
+              distance_miles: dayEditParsed.distance_miles,
+              pace_target: dayEditParsed.pace_target,
+              hr_cap: dayEditParsed.hr_cap,
+              description: dayEditParsed.description,
+              injury_prevention_note: dayEditParsed.injury_prevention_note,
+              reason: dayEditParsed.reason,
+            },
+          });
+          finalReply = `I've updated **${dayEditParsed.day}** to **${dayEditParsed.name}** (${dayEditParsed.distance_miles} mi · ${dayEditParsed.pace_target}).`;
+        } else if (
+          lower.includes('hrv') ||
+          lower.includes('recovery') ||
+          lower.includes('sleep') ||
+          lower.includes('readiness')
+        ) {
+          if (verifiedHealth) {
+            finalReply = `Your overnight HRV was **${verifiedHealth.hrv_last_night ?? '—'} ms** (${verifiedHealth.hrv_status ?? 'BALANCED'}), sleep duration was **${sleepHoursStr}**, and Body Battery is at **${verifiedHealth.body_battery ?? '—'} / 100**.\n\nKeep easy days truly aerobic (< 145 bpm) to support cellular recovery and tissue repair.`;
+          } else {
+            finalReply = `You haven't synced watch recovery data yet. Connect your Garmin watch via Garmlink on the Watch tab to sync live HRV, sleep, and training status telemetry.`;
+          }
+        } else {
+          finalReply = `Hey ${athleteName}! As your RaceKit Coach, I'm here to help optimize your training and race preparation. Let me know if you want to inspect your workouts, schedule a race taper, or check your recovery status!`;
+        }
       }
     }
 
     // Normalize any workouts created via tool calls so distance_miles = warmup + main + cooldown
     for (const tc of clientToolCalls) {
       if (tc.name === 'replace_workout_day' && tc.args) {
+        tc.args.day = normalizeDayName(String(tc.args.day || context?.today || getTodayDayName()));
+        tc.args.workout_type = normalizeWorkoutTypeAlias(tc.args.workout_type);
         const norm = normalizeWorkoutMileage(tc.args as any);
         tc.args.warmup_miles = norm.warmup_miles;
         tc.args.main_miles = norm.main_miles;

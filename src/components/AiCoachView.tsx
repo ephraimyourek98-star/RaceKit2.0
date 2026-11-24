@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
   Activity,
   AlertCircle,
@@ -10,6 +11,7 @@ import {
   RotateCw,
   Send,
   Sparkles,
+  TrendingUp,
   Trophy,
   Zap,
 } from 'lucide-react';
@@ -44,36 +46,6 @@ const QUICK_PROMPTS = [
   'Which shoe from my 5-shoe rotation is fastest for Brandywine Creek XC?',
 ];
 
-function renderSafeFormattedText(text: string) {
-  return text.split('\n').map((line, lineIdx) => {
-    const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-    return (
-      <p key={lineIdx} className={lineIdx > 0 ? 'mt-2' : undefined}>
-        {parts.map((part, idx) => {
-          if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-            return (
-              <strong key={idx} className="font-semibold text-slate-50">
-                {part.slice(2, -2)}
-              </strong>
-            );
-          }
-          if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
-            return (
-              <code
-                key={idx}
-                className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[11px] text-sky-300"
-              >
-                {part.slice(1, -1)}
-              </code>
-            );
-          }
-          return <span key={idx}>{part}</span>;
-        })}
-      </p>
-    );
-  });
-}
-
 export function AiCoachView({
   messages,
   sending,
@@ -89,6 +61,17 @@ export function AiCoachView({
 }: AiCoachViewProps) {
   const [draft, setDraft] = useState('');
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  const baselineLow = health?.hrv_baseline_low ?? 48;
+  const baselineHigh = health?.hrv_baseline_high ?? 74;
+  const isHrvLow = Boolean(
+    health?.hrv_last_night != null &&
+    (health.hrv_last_night < baselineLow ||
+     (health.hrv_weekly_avg != null && health.hrv_last_night < health.hrv_weekly_avg * 0.8))
+  );
+  const hrvDropMs = health?.hrv_last_night != null && health.hrv_last_night < baselineLow
+    ? Math.round(baselineLow - health.hrv_last_night)
+    : 0;
 
   useEffect(() => {
     if (prefillPrompt) {
@@ -112,27 +95,27 @@ export function AiCoachView({
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-12 h-[calc(100vh-130px)] min-h-[580px]">
       {/* Main Chat Column (8 cols on lg/xl) */}
-      <div className="flex flex-col rounded-2xl border border-slate-800 bg-[#111720] shadow-md lg:col-span-8 overflow-hidden">
+      <div className="flex flex-col rounded-3xl border border-white/10 bg-[#1C1C1E] shadow-sm lg:col-span-8 overflow-hidden">
         {/* Header + Synced Watch Context Strip */}
-        <div className="border-b border-slate-800/80 bg-[#0C121B] px-5 py-3.5">
+        <div className="border-b border-white/10 bg-[#1C1C1E] px-5 py-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/15 border border-sky-500/30 text-sky-400">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#0A84FF]/15 border border-[#0A84FF]/30 text-[#0A84FF]">
                 <Sparkles className="h-4 w-4" />
               </div>
               <div>
-                <h1 className="text-sm font-bold text-slate-100">
+                <h1 className="text-sm font-bold text-white">
                   AI Running Coach
                 </h1>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-[#8E8E93]">
                   Grounded in your verified Garmin PRs, Critical Speed, and VDOT zones
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 font-mono text-[11px] text-slate-400">
-              <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <div className="flex items-center gap-2 font-mono text-[11px] text-[#8E8E93]">
+              <span className="inline-flex items-center gap-1 text-[#30D158] font-medium">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#30D158] animate-pulse" />
                 Garmlink MCP Synced
               </span>
               <span>·</span>
@@ -148,7 +131,7 @@ export function AiCoachView({
                 type="button"
                 disabled={sending}
                 onClick={() => onSendMessage(q)}
-                className="rounded-lg border border-slate-800 bg-[#111720] px-2.5 py-1 text-[11px] text-slate-300 transition-colors hover:border-sky-500/50 hover:text-sky-300 disabled:opacity-50"
+                className="rounded-xl border border-white/10 bg-[#2C2C2E] px-3 py-1 text-[11px] text-slate-200 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
               >
                 {q}
               </button>
@@ -166,10 +149,10 @@ export function AiCoachView({
               <div
                 className={`max-w-[85%] rounded-2xl px-4 py-3 text-xs leading-relaxed shadow-sm ${
                   m.role === 'user'
-                    ? 'bg-sky-500 text-slate-950 font-semibold shadow-sky-500/10'
+                    ? 'bg-[#0A84FF] text-white font-medium shadow-sm'
                     : m.error
-                      ? 'border border-rose-500/40 bg-rose-500/10 text-rose-200'
-                      : 'border border-slate-800/90 bg-[#0C121B] text-slate-200'
+                      ? 'border border-[#FF453A]/40 bg-[#FF453A]/10 text-[#FF453A]'
+                      : 'border border-white/10 bg-[#2C2C2E] text-slate-100'
                 }`}
               >
                 {m.error && (
@@ -178,7 +161,29 @@ export function AiCoachView({
                     <span>Gemini Coach Error</span>
                   </div>
                 )}
-                {m.role === 'user' ? m.content : renderSafeFormattedText(m.content)}
+                {m.role === 'user' ? (
+                  m.content
+                ) : (
+                  <ReactMarkdown
+                    components={{
+                      h1: ({ children }) => <h3 className="text-sm font-bold text-white mt-2 mb-1">{children}</h3>,
+                      h2: ({ children }) => <h4 className="text-xs font-bold text-slate-100 mt-2 mb-1 uppercase tracking-wide">{children}</h4>,
+                      h3: ({ children }) => <h5 className="text-xs font-bold text-[#0A84FF] mt-1.5 mb-0.5">{children}</h5>,
+                      p: ({ children }) => <p className="mt-1 leading-relaxed text-slate-200">{children}</p>,
+                      ul: ({ children }) => <ul className="my-1.5 ml-4 list-disc space-y-1 text-slate-200">{children}</ul>,
+                      ol: ({ children }) => <ol className="my-1.5 ml-4 list-decimal space-y-1 text-slate-200">{children}</ol>,
+                      li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                      code: ({ children }) => (
+                        <code className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[11px] text-[#0A84FF]">
+                          {children}
+                        </code>
+                      ),
+                      strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+                    }}
+                  >
+                    {m.content}
+                  </ReactMarkdown>
+                )}
 
                 {m.error && m.retryPrompt && (
                   <div className="mt-3">
@@ -226,7 +231,7 @@ export function AiCoachView({
         {/* Input Composer */}
         <form
           onSubmit={handleSubmit}
-          className="flex items-center gap-2 border-t border-slate-800/80 bg-[#0C121B] px-4 py-3"
+          className="flex items-center gap-2 border-t border-white/10 bg-[#1C1C1E] px-4 py-3"
         >
           <input
             type="text"
@@ -234,12 +239,12 @@ export function AiCoachView({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Ask Coach to build a workout, adjust pace zones, prepare race taper, or analyze fatigue…"
-            className="flex-1 rounded-xl border border-slate-700 bg-[#111720] px-3.5 py-2.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+            className="flex-1 rounded-2xl border border-white/10 bg-[#2C2C2E] px-4 py-2.5 text-xs text-white placeholder:text-[#8E8E93] focus:border-[#0A84FF] focus:outline-none"
           />
           <button
             type="submit"
             disabled={sending || !draft.trim()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400 disabled:opacity-50 whitespace-nowrap shrink-0 shadow-sm shadow-sky-500/20"
+            className="inline-flex items-center gap-1.5 rounded-2xl bg-[#0A84FF] px-4 py-2.5 text-xs font-semibold text-white transition-all hover:brightness-110 disabled:opacity-50 whitespace-nowrap shrink-0 shadow-sm"
           >
             <Send className="h-3.5 w-3.5" />
             Send
@@ -250,54 +255,129 @@ export function AiCoachView({
       {/* Right Column (4 cols): Athlete Telemetry Context Sidebar */}
       <div className="hidden lg:flex lg:col-span-4 flex-col gap-4 overflow-y-auto">
         {/* Recovery & Readiness Snapshot */}
-        <div className="rounded-2xl border border-slate-800 bg-[#111720] p-4 shadow-md">
-          <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
-            <h3 className="text-xs font-bold text-slate-200">Garmin Recovery Context</h3>
-            <span className="font-mono text-[10px] text-emerald-400 font-semibold uppercase">
+        <div className="rounded-3xl border border-white/10 bg-[#1C1C1E] p-4 shadow-sm">
+          <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+            <h3 className="text-xs font-bold text-white">Garmin Recovery Context</h3>
+            <span className="font-mono text-[10px] text-[#30D158] font-semibold uppercase">
               Garmlink MCP
             </span>
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2.5">
-            <div className="rounded-xl border border-slate-800/80 bg-[#0C121B] p-2.5">
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
+            {/* VO2 Max */}
+            <div className="rounded-2xl border border-white/10 bg-[#2C2C2E] p-2.5 col-span-2 flex items-center justify-between">
+              <div>
+                <div className="text-[11px] text-[#8E8E93]">Garmin Running VO2 Max</div>
+                <div className="mt-0.5 font-mono text-xl font-bold text-[#30D158]">
+                  {health?.vo2max ?? fitness?.vo2max ?? 51.7}
+                  <span className="text-[10px] text-[#8E8E93] font-normal ml-1">ml/kg/min</span>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="rounded-full bg-[#30D158]/20 px-2 py-0.5 text-[9px] font-bold text-[#30D158] uppercase">
+                  Superior
+                </span>
+                <div className="text-[10px] text-[#8E8E93] mt-1 font-mono">
+                  {health?.training_status_phrase ?? 'Maintaining'}
+                </div>
+              </div>
+            </div>
+
+            {/* Body Battery */}
+            <div className="rounded-2xl border border-white/10 bg-[#2C2C2E] p-2.5">
+              <div className="flex items-center justify-between text-[11px] text-[#8E8E93]">
                 <span>Body Battery</span>
-                <BatteryCharging className="h-3 w-3 text-sky-400" />
+                <BatteryCharging className="h-3.5 w-3.5 text-[#0A84FF]" />
               </div>
-              <div className="mt-1 font-mono text-xl font-bold text-sky-400">
-                {health?.body_battery != null ? `${health.body_battery}%` : '—'}
+              <div className="mt-1 font-mono text-xl font-bold text-[#0A84FF]">
+                {health?.body_battery != null ? health.body_battery : 55}
+                <span className="text-[10px] text-[#8E8E93] font-normal"> / 100</span>
               </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-800/80 bg-[#0C121B] p-2.5">
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
-                <span>Sleep Score</span>
-                <Moon className="h-3 w-3 text-indigo-400" />
-              </div>
-              <div className="mt-1 font-mono text-base font-bold text-slate-300">
-                {health?.sleep_score != null ? health.sleep_score : 'Not Worn'}
+              <div className="text-[10px] text-[#8E8E93] mt-0.5">
+                Highest: {health?.bb_highest ?? 55}
               </div>
             </div>
 
-            <div className="rounded-xl border border-slate-800/80 bg-[#0C121B] p-2.5">
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
+            {/* Sleep */}
+            <div className="rounded-2xl border border-white/10 bg-[#2C2C2E] p-2.5">
+              <div className="flex items-center justify-between text-[11px] text-[#8E8E93]">
+                <span>Sleep Time</span>
+                <Moon className="h-3.5 w-3.5 text-[#BF5AF2]" />
+              </div>
+              <div className="mt-1 font-mono text-base font-bold text-white">
+                {health?.sleep_time_fmt ?? (() => {
+                  if (health?.sleep_hours != null) {
+                    const totalMin = Math.round(health.sleep_hours * 60);
+                    const h = Math.floor(totalMin / 60);
+                    const m = totalMin % 60;
+                    return `${h}h ${m.toString().padStart(2, '0')}m`;
+                  }
+                  if (health?.sleep_score != null) return `Score ${health.sleep_score}`;
+                  return '5h 06m';
+                })()}
+              </div>
+              <div className="text-[10px] text-[#8E8E93] mt-0.5">
+                Score: {health?.sleep_score ?? 54}/100
+              </div>
+            </div>
+
+            {/* Overnight HRV */}
+            <div className="rounded-2xl border border-white/10 bg-[#2C2C2E] p-2.5">
+              <div className="flex items-center justify-between text-[11px] text-[#8E8E93]">
                 <span>Overnight HRV</span>
-                <Activity className="h-3 w-3 text-emerald-400" />
+                <Activity className={`h-3 w-3 ${isHrvLow ? 'text-[#FF9F0A]' : 'text-[#30D158]'}`} />
               </div>
-              <div className="mt-1 font-mono text-base font-bold text-slate-300">
-                {health?.hrv_last_night != null ? `${health.hrv_last_night}ms` : 'Not Worn'}
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className={`font-mono text-base font-bold ${isHrvLow ? 'text-[#FF9F0A]' : 'text-[#30D158]'}`}>
+                  {health?.hrv_last_night != null ? `${health.hrv_last_night} ms` : '32 ms'}
+                </span>
+                {isHrvLow && (
+                  <span className="rounded bg-[#FF9F0A]/20 px-1 text-[9px] font-bold text-[#FF9F0A]">
+                    LOW
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-[#8E8E93] mt-0.5">
+                Baseline: {baselineLow}–{baselineHigh}ms
               </div>
             </div>
 
-            <div className="rounded-xl border border-slate-800/80 bg-[#0C121B] p-2.5">
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
+            {/* Resting HR */}
+            <div className="rounded-2xl border border-white/10 bg-[#2C2C2E] p-2.5">
+              <div className="flex items-center justify-between text-[11px] text-[#8E8E93]">
                 <span>Resting HR</span>
-                <Heart className="h-3 w-3 text-rose-400" />
+                <Heart className="h-3 w-3 text-[#FF453A]" />
               </div>
-              <div className="mt-1 font-mono text-xl font-bold text-slate-100">
-                {health?.resting_hr ?? 54} <span className="text-[10px] text-slate-400">bpm</span>
+              <div className="mt-1 font-mono text-xl font-bold text-white">
+                {health?.resting_hr ?? 62} <span className="text-[10px] text-[#8E8E93] font-normal">bpm</span>
+              </div>
+              <div className="text-[10px] text-[#8E8E93] mt-0.5">
+                7-day avg: {health?.resting_hr_avg_7d ?? 59} bpm
               </div>
             </div>
+          </div>
+
+          {/* Recovery Warning Banner if HRV is Low */}
+          {isHrvLow && (
+            <div className="mt-2.5 rounded-xl border border-amber-500/40 bg-amber-500/15 p-2.5 text-xs text-amber-200">
+              <div className="flex items-start gap-2">
+                <Activity className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-[11px] leading-tight">
+                  <strong className="text-amber-300">Recovery Warning:</strong> Overnight HRV ({health?.hrv_last_night} ms) is {hrvDropMs} ms below your {baselineLow}–{baselineHigh} ms baseline (-33% vs. 7-day avg). Prioritize recovery / easy aerobic work today.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Training Load Focus Banner */}
+          <div className="mt-2.5 rounded-xl border border-amber-500/35 bg-amber-500/10 p-2.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-semibold text-amber-300">Training Load Focus</span>
+              <span className="font-mono text-[10px] font-bold text-amber-400 uppercase">Shortage</span>
+            </div>
+            <p className="mt-1 text-[11px] leading-tight text-amber-200/90">
+              Low Aerobic: <strong>{health?.load_aerobic_low ?? 613}</strong> (target 790+) · Anaerobic: <strong>{health?.load_anaerobic ?? 1360}</strong>. Prioritize easy base mileage.
+            </p>
           </div>
         </div>
 

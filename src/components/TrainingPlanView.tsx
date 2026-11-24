@@ -1,12 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
+  Activity,
   AlertCircle,
+  Calendar,
+  ChevronRight,
   Download,
   Flag,
+  Flame,
   Plus,
   RefreshCw,
   RotateCcw,
   Sparkles,
+  Watch,
   X,
 } from 'lucide-react';
 import {
@@ -32,9 +37,10 @@ interface TrainingPlanViewProps {
   health: HealthSnapshot | null;
   aiPlanLoading: boolean;
   aiWorkoutLoading: boolean;
+  aiWorkoutDay?: string | null;
   aiError: string | null;
   onChangeFocus: (focus: TrainingFocusId) => void;
-  onGenerateAiPlan: (customGoal: string) => void;
+  onGenerateAiPlan: (customGoal: string, focusOverride?: TrainingFocusId) => void;
   onGenerateSingleWorkout: (day: string, goalPrompt: string) => void;
   onSetTargetRace: (race: { name: string; dist: string; day: string }) => void;
   onClearTargetRace: () => void;
@@ -73,6 +79,7 @@ export function TrainingPlanView({
   health,
   aiPlanLoading,
   aiWorkoutLoading,
+  aiWorkoutDay,
   aiError,
   onChangeFocus,
   onGenerateAiPlan,
@@ -92,6 +99,14 @@ export function TrainingPlanView({
   const [raceDist, setRaceDist] = useState(targetRace?.dist ?? '5K');
   const [raceDay, setRaceDay] = useState(targetRace?.day ?? 'Thursday');
   const [raceFormError, setRaceFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (targetRace) {
+      setRaceName(targetRace.name);
+      setRaceDist(targetRace.dist);
+      setRaceDay(targetRace.day);
+    }
+  }, [targetRace]);
 
   const todayName = getTodayDayName();
 
@@ -137,103 +152,132 @@ export function TrainingPlanView({
         }${health?.sleep_score ? ` · Sleep ${health.sleep_score}` : ''})`
       : 'Using verified PRs & VDOT pace zones (connect Garmlink MCP in Watch Sync to include live Garmin history)';
 
+  const dynamicTotalMiles = Number(
+    plan.schedule
+      .reduce((sum, w) => sum + (Number(w.distance_miles) || 0), 0)
+      .toFixed(1)
+  );
+  // Longest non-race run among the 7 rendered cards
+  const dynamicLongRun = Number(
+    Math.max(
+      0,
+      ...plan.schedule
+        .filter((w) => w.workout_type !== 'race' && w.workout_type !== 'rest')
+        .map((w) => Number(w.distance_miles) || 0)
+    ).toFixed(1)
+  );
+  const qualityCount = plan.schedule.filter((w) => w.workout_type === 'workout').length;
+  const raceCount = plan.schedule.filter((w) => w.workout_type === 'race').length;
+  const easyRecoveryCount = plan.schedule.filter(
+    (w) => w.workout_type === 'easy' || w.workout_type === 'recovery' || w.workout_type === 'long_run'
+  ).length;
+  const restCount = plan.schedule.filter((w) => w.workout_type === 'rest').length;
+
   return (
     <div className="space-y-6">
-      {/* Header & Focus Select */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-50">
-            AI Training Plan &amp; Workout Builder
-          </h1>
-          <p className="mt-1 text-xs text-slate-400">
-            {plan.title} ·{' '}
-            <span className="font-mono tabular-nums text-slate-200">{plan.weekly_mileage} mpw</span>
-            {plan.ai_generated && (
-              <span className="ml-2 font-medium text-emerald-400">· AI Generated</span>
-            )}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <label htmlFor="plan-focus-select" className="sr-only">
-            Training Focus
-          </label>
-          <select
-            id="plan-focus-select"
-            value={focus}
-            onChange={(e) => onChangeFocus(e.target.value as TrainingFocusId)}
-            className="rounded-lg border border-slate-700 bg-[#111720] px-3 py-2 text-xs font-medium text-sky-400 focus:border-sky-500 focus:outline-none"
-          >
-            {(Object.keys(TRAINING_FOCUS_LABELS) as TrainingFocusId[]).map((id) => (
-              <option key={id} value={id}>
-                {TRAINING_FOCUS_LABELS[id]}
-              </option>
-            ))}
-          </select>
+      {/* ── Header & Segmented Training Focus Capsule (Apple Fitness Style) ── */}
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-slate-100">
+              Workouts &amp; Schedule
+            </h1>
+            <p className="mt-0.5 text-xs text-slate-400">
+              {plan.title} · <strong className="text-slate-200 font-mono">{dynamicTotalMiles} mi scheduled</strong>
+              {aiPlanLoading ? (
+                <span className="text-sky-400 ml-1.5 font-semibold inline-flex items-center gap-1">
+                  <RefreshCw className="h-3 w-3 animate-spin inline" /> Generating…
+                </span>
+              ) : plan.ai_generated ? (
+                <span className="text-emerald-400 ml-1.5 font-semibold">· AI Adapted</span>
+              ) : null}
+            </p>
+          </div>
 
           {hasCustomAiPlan && (
             <button
               type="button"
               onClick={onResetToBasePlan}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-[#171F2B] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-800 whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/80 px-3.5 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-700"
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              Reset to Template
+              Reset Plan
             </button>
           )}
         </div>
-      </div>
 
-      {/* ── AI Plan & Single Workout Builder Panel ── */}
-      <section className="rounded-xl border border-slate-800/80 bg-[#111720] p-5 space-y-4">
+        {/* Focus Capsule Segmented Control (Apple iOS Dark Style) */}
+        <div className="flex items-center gap-1 overflow-x-auto rounded-2xl border border-white/10 bg-[#1C1C1E] p-1 shadow-inner">
+          {(Object.keys(TRAINING_FOCUS_LABELS) as TrainingFocusId[]).map((id) => {
+            const active = focus === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  onChangeFocus(id);
+                  onGenerateAiPlan(customGoal, id);
+                }}
+                className={`flex-1 min-w-[100px] rounded-xl py-2 px-3 text-xs font-semibold transition-all whitespace-nowrap text-center ${
+                  active
+                    ? 'bg-[#3A3A3C] text-white border border-white/10 shadow-sm'
+                    : 'text-[#8E8E93] hover:text-white hover:bg-white/5'
+                }`}
+              >
+                {TRAINING_FOCUS_LABELS[id]}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ── Apple Intelligence AI Workout Assistant Pill ── */}
+      <section className="rounded-3xl border border-white/10 bg-[#1C1C1E] p-5 shadow-sm backdrop-blur-xl space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-sky-400" />
-            <h2 className="text-sm font-semibold text-slate-100">
-              Generate Workouts &amp; Plans with Gemini AI
+            <Sparkles className="h-4 w-4 text-[#30D158]" />
+            <h2 className="text-sm font-bold text-white">
+              AI Coach Workout Builder
             </h2>
           </div>
-          <span className="text-[11px] text-slate-400">{watchContextSummary}</span>
+          <span className="text-[11px] font-mono text-[#8E8E93]">{watchContextSummary}</span>
         </div>
 
-        {/* Full 7-day AI plan builder */}
         <div className="flex flex-wrap items-center gap-2.5">
           <input
             type="text"
             aria-label="Custom instructions for AI training plan"
             value={customGoal}
             onChange={(e) => setCustomGoal(e.target.value)}
-            placeholder="Optional instructions (e.g., 5 runs/wk, Tuesday track speed, build low-aerobic Zone 2 base)…"
-            className="min-w-[240px] flex-1 rounded-lg border border-slate-700 bg-[#090D12] px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+            placeholder="Ask AI Coach (e.g. 5 runs/wk, Tuesday track intervals, build low-aerobic Zone 2 base)…"
+            className="min-w-[240px] flex-1 rounded-2xl border border-white/10 bg-[#2C2C2E] px-4 py-2.5 text-xs text-white placeholder:text-[#8E8E93] focus:border-[#0A84FF] focus:outline-none"
           />
           <button
             type="button"
             onClick={() => onGenerateAiPlan(customGoal)}
             disabled={aiPlanLoading || aiWorkoutLoading}
-            className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400 disabled:opacity-60 whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2 rounded-2xl bg-[#0A84FF] px-4 py-2.5 text-xs font-bold text-white transition-all hover:brightness-110 disabled:opacity-50 whitespace-nowrap shrink-0 shadow-sm"
           >
             {aiPlanLoading ? (
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <Sparkles className="h-3.5 w-3.5" />
             )}
-            {aiPlanLoading ? 'Building 7-Day Plan…' : 'Generate AI 7-Day Plan'}
+            {aiPlanLoading ? 'Building 7-Day Plan…' : 'Generate Full Plan'}
           </button>
         </div>
 
-        {/* Single AI workout builder */}
+        {/* Quick Workout Modifier Bar */}
         <form
           onSubmit={handleSubmitSingleWorkout}
-          className="flex flex-wrap items-center gap-2.5 border-t border-slate-800/80 pt-4"
+          className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/10"
         >
-          <span className="text-xs font-medium text-slate-300 whitespace-nowrap">
-            Create Single Workout:
-          </span>
+          <span className="text-xs text-[#8E8E93] font-medium">Modify Day:</span>
           <select
             aria-label="Day for AI workout"
             value={workoutDay}
             onChange={(e) => setWorkoutDay(e.target.value)}
-            className="rounded-lg border border-slate-700 bg-[#090D12] px-3 py-1.5 text-xs text-slate-100 focus:border-sky-500 focus:outline-none"
+            className="rounded-xl border border-white/10 bg-[#2C2C2E] px-3 py-1.5 text-xs font-semibold text-white focus:border-[#0A84FF] focus:outline-none"
           >
             {DAYS_OF_WEEK.map((d) => (
               <option key={d} value={d}>
@@ -249,127 +293,49 @@ export function TrainingPlanView({
               setWorkoutPrompt(e.target.value);
               if (workoutFormError) setWorkoutFormError(null);
             }}
-            placeholder="e.g., 5K threshold cruise intervals on track, or 40 min Zone 2 recovery run"
-            className="min-w-[220px] flex-1 rounded-lg border border-slate-700 bg-[#090D12] px-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+            placeholder="e.g., Run for Pie 5K 3.1 mile race, or 40 min Zone 2 easy run"
+            className="min-w-[200px] flex-1 rounded-xl border border-white/10 bg-[#2C2C2E] px-3 py-1.5 text-xs text-white placeholder:text-[#8E8E93] focus:border-[#0A84FF] focus:outline-none"
           />
           <button
             type="submit"
             disabled={aiWorkoutLoading || aiPlanLoading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/45 bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/25 disabled:opacity-60 whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#30D158]/40 bg-[#30D158]/15 px-3.5 py-1.5 text-xs font-bold text-[#30D158] hover:bg-[#30D158]/25 disabled:opacity-50 whitespace-nowrap shrink-0"
           >
-            {aiWorkoutLoading ? (
-              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Plus className="h-3.5 w-3.5" />
-            )}
-            {aiWorkoutLoading ? 'Creating…' : 'Build AI Workout'}
+            {aiWorkoutLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+            {aiWorkoutLoading ? 'Building…' : 'Replace Day'}
           </button>
         </form>
 
-        {workoutFormError && (
-          <p role="alert" className="text-xs text-rose-400">
-            {workoutFormError}
-          </p>
-        )}
-
         {aiError && (
-          <div
-            role="alert"
-            className="flex items-start gap-2 rounded-lg border border-rose-500/35 bg-rose-500/10 px-3.5 py-2.5 text-xs text-rose-200"
-          >
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" />
+          <div role="alert" className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200 flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
             <span>{aiError}</span>
           </div>
         )}
       </section>
 
-      {/* Race-Week Auto-Taper Bar */}
-      <form
-        onSubmit={handleSubmitRace}
-        className="rounded-xl border border-slate-800/80 bg-[#111720] p-4"
-      >
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
-            <Flag className="h-3.5 w-3.5 text-sky-400" />
-            <span>Target Race Auto-Taper</span>
+      {/* Target Race Auto-Taper Banner (if target race set) */}
+      {targetRace && (
+        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 flex items-center justify-between text-xs text-amber-200">
+          <div className="flex items-center gap-2">
+            <Flag className="h-4 w-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Target Race Taper:</strong> {targetRace.name} ({targetRace.dist}) scheduled on <strong>{targetRace.day}</strong>. Workouts adjusted for fresh legs.
+            </span>
           </div>
-
-          <input
-            type="text"
-            aria-label="Target race name"
-            value={raceName}
-            onChange={(e) => {
-              setRaceName(e.target.value);
-              if (raceFormError) setRaceFormError(null);
-            }}
-            placeholder="Race name (e.g., Run for Pie 5K)"
-            className="min-w-[200px] flex-1 rounded-lg border border-slate-700 bg-[#090D12] px-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
-          />
-
-          <select
-            aria-label="Target race distance"
-            value={raceDist}
-            onChange={(e) => setRaceDist(e.target.value)}
-            className="rounded-lg border border-slate-700 bg-[#090D12] px-3 py-1.5 text-xs text-slate-100 focus:border-sky-500 focus:outline-none"
-          >
-            <option value="5K">5K</option>
-            <option value="800m">800m</option>
-            <option value="1600m">1600m</option>
-            <option value="3200m">3200m</option>
-            <option value="10K">10K</option>
-            <option value="Half Marathon">Half Marathon</option>
-          </select>
-
-          <select
-            aria-label="Target race day"
-            value={raceDay}
-            onChange={(e) => setRaceDay(e.target.value)}
-            className="rounded-lg border border-slate-700 bg-[#090D12] px-3 py-1.5 text-xs text-slate-100 focus:border-sky-500 focus:outline-none"
-          >
-            {DAYS_OF_WEEK.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-
           <button
-            type="submit"
-            className="rounded-lg bg-slate-200 px-3.5 py-1.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-white whitespace-nowrap shrink-0"
+            type="button"
+            onClick={onClearTargetRace}
+            className="inline-flex items-center gap-1 rounded-lg bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-300 hover:bg-amber-500/30"
           >
-            Set Race &amp; Taper
+            <X className="h-3 w-3" />
+            Clear
           </button>
-
-          {targetRace && (
-            <button
-              type="button"
-              onClick={() => {
-                setRaceName('');
-                onClearTargetRace();
-              }}
-              className="inline-flex items-center gap-1 rounded-lg border border-rose-500/35 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/20 whitespace-nowrap shrink-0"
-            >
-              <X className="h-3.5 w-3.5" />
-              Clear Taper
-            </button>
-          )}
         </div>
+      )}
 
-        {raceFormError && (
-          <p role="alert" className="mt-2 text-xs text-rose-400">
-            {raceFormError}
-          </p>
-        )}
-      </form>
-
-      {/* Physiological Focus Callout */}
-      <div className="rounded-xl border border-slate-800/80 bg-[#111720] px-5 py-3.5 text-xs leading-relaxed text-slate-300">
-        <span className="font-semibold text-slate-100">Training Focus: </span>
-        {plan.aerobic_deficit_focus}
-      </div>
-
-      {/* 7-Day Schedule Grid + 8th Weekly Analytics Summary Card */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="schedule-grid">
+      {/* ── 7-Day Workout Cards (Apple Fitness Daily Workout Style) ── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" data-testid="schedule-grid">
         {plan.schedule.map((w) => {
           const isToday = w.day === todayName;
           const typeMeta = WORKOUT_TYPE_LABEL[w.workout_type] ?? WORKOUT_TYPE_LABEL.easy;
@@ -377,74 +343,95 @@ export function TrainingPlanView({
           return (
             <article
               key={w.day}
-              className={`flex flex-col justify-between rounded-xl border p-5 transition-colors ${
-                w.workout_type === 'race'
-                  ? 'border-amber-500/50 bg-[#161A22]'
-                  : w.ai_generated
-                    ? 'border-emerald-500/45 bg-[#11191E]'
-                    : isToday
-                      ? 'border-sky-500/45 bg-[#111720]'
-                      : 'border-slate-800/80 bg-[#111720]'
+              className={`relative rounded-3xl border p-5 flex flex-col justify-between transition-all ${
+                isToday
+                  ? 'border-[#0A84FF]/60 bg-[#1C1C1E] shadow-lg shadow-[#0A84FF]/10'
+                  : w.workout_type === 'race'
+                    ? 'border-[#FF9F0A]/50 bg-[#1C1C1E]'
+                    : w.ai_generated
+                      ? 'border-[#30D158]/40 bg-[#1C1C1E]'
+                      : 'border-white/10 bg-[#1C1C1E]'
               }`}
             >
+              {aiWorkoutLoading && (aiWorkoutDay ? aiWorkoutDay === w.day : workoutDay === w.day) && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-3xl bg-[#1C1C1E]/90 backdrop-blur-sm p-4 text-center">
+                  <RefreshCw className="h-6 w-6 animate-spin text-[#0A84FF] mb-2" />
+                  <span className="text-xs font-bold text-white">Adapting {w.day} with AI…</span>
+                  <span className="text-[10px] text-slate-400 mt-1">Applying VDOT pacing &amp; ground-truth recovery</span>
+                </div>
+              )}
               <div>
-                <div className="flex items-center justify-between gap-2 text-xs">
-                  <div className="flex items-center gap-1.5 text-slate-400">
-                    <span className="font-semibold text-slate-200">{w.day}</span>
+                {/* Day Header Row */}
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-sm text-white uppercase tracking-wide">
+                      {w.day}
+                    </span>
                     {isToday && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-medium text-sky-400">Today</span>
-                      </>
-                    )}
-                    {w.ai_generated && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-medium text-emerald-400">AI Built</span>
-                      </>
+                      <span className="rounded-full bg-[#0A84FF] px-2 py-0.5 text-[10px] font-extrabold text-white uppercase">
+                        Today
+                      </span>
                     )}
                   </div>
-                  <span className="font-mono font-bold tabular-nums text-slate-100">
-                    {w.distance_miles > 0 ? `${w.distance_miles} mi` : 'Rest'}
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                    w.workout_type === 'race'
+                      ? 'bg-[#FF9F0A]/20 text-[#FF9F0A]'
+                      : w.workout_type === 'workout'
+                        ? 'bg-[#0A84FF]/20 text-[#0A84FF]'
+                        : w.workout_type === 'long_run'
+                          ? 'bg-[#BF5AF2]/20 text-[#BF5AF2]'
+                          : w.workout_type === 'rest'
+                            ? 'bg-[#2C2C2E] text-[#8E8E93]'
+                            : 'bg-[#30D158]/20 text-[#30D158]'
+                  }`}>
+                    {typeMeta.label}
                   </span>
                 </div>
 
-                <h3 className="mt-2 text-sm font-bold text-slate-50">{w.name}</h3>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px]">
-                  <span className={`font-medium ${typeMeta.colorClass}`}>{typeMeta.label}</span>
-                  <span className="text-slate-600" aria-hidden="true">·</span>
-                  <span className="font-mono tabular-nums text-slate-300">{w.pace_target}</span>
-                  <span className="text-slate-600" aria-hidden="true">·</span>
-                  <span className="font-mono tabular-nums text-amber-300/90">HR {w.hr_cap}</span>
+                {/* Hero Workout Distance */}
+                <div className="mt-3">
+                  <div className="font-mono text-3xl font-extrabold text-white tracking-tight">
+                    {w.distance_miles > 0 ? `${w.distance_miles} mi` : 'Rest Day'}
+                  </div>
+                  {w.warmup_miles != null && w.main_miles != null && w.cooldown_miles != null && (w.warmup_miles > 0 || w.cooldown_miles > 0) && (
+                    <div className="mt-0.5 text-[11px] font-mono text-[#8E8E93]">
+                      {w.warmup_miles} WU · {w.main_miles} Main · {w.cooldown_miles} CD
+                    </div>
+                  )}
+                  <h3 className="mt-1 font-bold text-sm text-slate-200">{w.name}</h3>
                 </div>
 
-                <p className="mt-3 text-xs leading-relaxed text-slate-300">{w.description}</p>
-                <p className="mt-2.5 border-t border-slate-800/70 pt-2 text-[11px] text-slate-400">
+                {/* Target Pace & HR Badge */}
+                {w.distance_miles > 0 && (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                    <span className="rounded-md bg-slate-800/90 px-2 py-0.5 text-slate-300 font-semibold">
+                      {w.pace_target}
+                    </span>
+                    <span className="rounded-md bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 text-rose-300 font-semibold">
+                      HR {w.hr_cap}
+                    </span>
+                  </div>
+                )}
+
+                <p className="mt-3 text-xs text-slate-300 leading-relaxed whitespace-pre-line">{w.description}</p>
+                <div className="mt-2 pt-2 border-t border-slate-800/60 text-[10px] text-slate-400">
                   Guardrail: {w.injury_prevention_note}
-                </p>
+                </div>
               </div>
 
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/70 pt-3">
+              {/* Action Buttons */}
+              <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between gap-2">
                 {w.distance_miles > 0 ? (
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleExport(w, 'tcx')}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-[#0D131B] px-2.5 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:border-sky-500/60 hover:text-sky-300"
-                    >
-                      <Download className="h-3 w-3 text-sky-400" />
-                      Watch .TCX
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleExport(w, 'json')}
-                      className="rounded-md border border-slate-700 bg-[#0D131B] px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:bg-slate-800"
-                    >
-                      JSON
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleExport(w, 'tcx')}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-700 bg-slate-800/80 px-2.5 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-700 transition-colors"
+                  >
+                    <Download className="h-3 w-3 text-sky-400" />
+                    Send to Watch
+                  </button>
                 ) : (
-                  <span className="text-[11px] text-slate-500">Recovery Day</span>
+                  <span className="text-[11px] text-slate-500">Recovery &amp; Mobility</span>
                 )}
 
                 <button
@@ -454,10 +441,10 @@ export function TrainingPlanView({
                       `Review my ${w.day} session ("${w.name}", ${w.distance_miles} mi) against my synced watch data and adjust the workout if needed.`
                     )
                   }
-                  className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-400 transition-colors hover:text-sky-300"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-sky-400 hover:text-sky-300 transition-colors"
                 >
                   <Sparkles className="h-3 w-3" />
-                  Tweak with AI
+                  Tweak
                 </button>
               </div>
             </article>
@@ -465,67 +452,57 @@ export function TrainingPlanView({
         })}
 
         {/* 8th Slot: Weekly Summary & Volume Distribution Card */}
-        <div className="flex flex-col justify-between rounded-xl border border-slate-800/80 bg-gradient-to-br from-[#111720] via-[#0E1520] to-[#0A1018] p-5 shadow-md">
+        <div className="rounded-3xl border border-white/10 bg-[#1C1C1E] p-5 shadow-sm flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-semibold text-slate-200">Weekly Target Overview</span>
-              <span className="font-mono text-emerald-400 font-bold">Planned Week</span>
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-300 uppercase tracking-wide">Weekly Summary</span>
+              <span className="font-mono text-[#30D158] font-bold">Planned</span>
             </div>
 
             <div className="mt-3">
-              <div className="text-xs text-slate-400">Total Planned Volume</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="font-mono text-3xl font-extrabold text-slate-50">
-                  {plan.weekly_mileage}
-                </span>
+              <div className="text-xs text-slate-400">Total Scheduled Miles</div>
+              <div className="mt-1 flex items-baseline gap-2 font-mono">
+                <span className="text-4xl font-extrabold text-white">{dynamicTotalMiles}</span>
                 <span className="text-xs font-semibold text-slate-400">miles</span>
               </div>
             </div>
 
-            <div className="mt-4 space-y-2 border-t border-slate-800/80 pt-3 text-xs">
+            <div className="mt-4 space-y-2 text-xs">
               <div className="flex justify-between text-slate-300">
-                <span>Long Run</span>
-                <span className="font-mono font-bold text-indigo-300">
-                  {Math.max(...plan.schedule.map((w) => w.distance_miles))} mi
-                </span>
+                <span>Long Run:</span>
+                <strong className="font-mono text-slate-100">
+                  {dynamicLongRun} mi
+                </strong>
               </div>
               <div className="flex justify-between text-slate-300">
-                <span>Quality Sessions</span>
-                <span className="font-mono font-bold text-sky-400">
-                  {plan.schedule.filter((w) => w.workout_type === 'workout' || w.workout_type === 'race').length} days
-                </span>
+                <span>Quality Days:</span>
+                <strong className="font-mono text-[#0A84FF]">
+                  {qualityCount}
+                </strong>
               </div>
               <div className="flex justify-between text-slate-300">
-                <span>Zone 2 Aerobic Base</span>
-                <span className="font-mono font-bold text-emerald-400">
-                  {plan.schedule.filter((w) => w.workout_type === 'easy' || w.workout_type === 'long_run').length} days
-                </span>
+                <span>Race Days:</span>
+                <strong className="font-mono text-[#FF9F0A]">
+                  {raceCount}
+                </strong>
               </div>
               <div className="flex justify-between text-slate-300">
-                <span>Rest &amp; Recovery</span>
-                <span className="font-mono font-bold text-amber-300">
-                  {plan.schedule.filter((w) => w.workout_type === 'recovery' || w.workout_type === 'rest').length} days
-                </span>
+                <span>Easy / Recovery Days:</span>
+                <strong className="font-mono text-[#30D158]">
+                  {easyRecoveryCount}
+                </strong>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span>Rest Days:</span>
+                <strong className="font-mono text-slate-400">
+                  {restCount}
+                </strong>
               </div>
             </div>
           </div>
 
-          <div className="mt-4 border-t border-slate-800/80 pt-3">
-            <button
-              type="button"
-              onClick={() => {
-                plan.schedule.forEach((w) => {
-                  if (w.distance_miles > 0) {
-                    handleExport(w, 'tcx');
-                  }
-                });
-                onNotify('Exported all scheduled workouts to .TCX.', 'success');
-              }}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-sky-500/15 border border-sky-500/35 py-2 text-xs font-semibold text-sky-300 transition-colors hover:bg-sky-500/25"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Download All Workouts (.TCX)
-            </button>
+          <div className="mt-4 pt-3 border-t border-white/10 text-[11px] text-slate-400">
+            {plan.aerobic_deficit_focus}
           </div>
         </div>
       </div>

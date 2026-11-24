@@ -11,8 +11,14 @@ export type ShoeId =
   | 'streakfly'
   | 'vaporfly_next2'
   | 'dragonfly_xc'
+  | 'rival_xc_7'
   | 'dragonfly_track'
-  | 'nb_1080';
+  | 'dragonfly_elite'
+  | 'victory_2'
+  | 'avanti_tyo'
+  | 'fuelcell_sc_ldx'
+  | 'nb_1080'
+  | (string & {});
 
 export type WindDirection = 'head' | 'tail' | 'cross' | 'mixed';
 
@@ -161,6 +167,7 @@ export interface ShoeComparison {
   shoe_id: ShoeId;
   label: string;
   short_label: string;
+  category?: 'track_spike' | 'xc_spike' | 'road_racing' | 'trainer';
   time_s: number;
   time_fmt: string;
   pace_per_mile: string;
@@ -169,7 +176,64 @@ export interface ShoeComparison {
   tag: 'OPTIMAL' | 'VIABLE' | 'TRAINING HEAVY' | 'SURFACE HAZARD';
 }
 
-export interface HealthSnapshot {
+export interface TrainingReadiness {
+  date?: string | null;
+  score: number | null;
+  level: string | null;
+  feedback: string | null;
+  recovery_hours: number | null;
+  factors: {
+    sleep_score_pct: number | null;
+    recovery_pct: number | null;
+    hrv_pct: number | null;
+    sleep_history_pct: number | null;
+    stress_history_pct: number | null;
+    acwr_pct: number | null;
+  };
+}
+
+export interface GarminRacePredictions {
+  time_5k_s: number | null;
+  time_10k_s: number | null;
+  time_half_s: number | null;
+  time_marathon_s: number | null;
+}
+
+export interface GarminZone {
+  zone: number;
+  low: number | null;
+  high: number | null;
+}
+
+/** Live Garmlink metrics beyond the core recovery snapshot (all optional; null/absent = not measured). */
+export interface GarminExtras {
+  readiness?: TrainingReadiness | null;
+  garmin_race_predictions?: GarminRacePredictions | null;
+  spo2_avg_sleep?: number | null;
+  spo2_latest?: number | null;
+  stress_max?: number | null;
+  respiration_avg_sleep?: number | null;
+  respiration_avg_waking?: number | null;
+  steps?: number | null;
+  step_goal?: number | null;
+  calories_total?: number | null;
+  bmr_calories?: number | null;
+  active_calories?: number | null;
+  floors?: number | null;
+  intensity_weekly_total?: number | null;
+  intensity_week_goal?: number | null;
+  lthr_bpm?: number | null;
+  running_ftp_w?: number | null;
+  running_ftp_wkg?: number | null;
+  hr_zones?: GarminZone[] | null;
+  power_zones?: GarminZone[] | null;
+  fitness_age?: number | null;
+  vigorous_minutes_avg?: number | null;
+  longest_run_m?: number | null;
+  longest_run_date?: string | null;
+}
+
+export interface HealthSnapshot extends GarminExtras {
   date: string;
   vo2max: number | null;
   hrv_last_night: number | null;
@@ -179,12 +243,43 @@ export interface HealthSnapshot {
   hrv_baseline_high: number;
   sleep_score: number | null;
   sleep_hours: number | null;
+  sleep_seconds?: number | null;
+  sleep_time_fmt?: string;
+  deep_sleep_s?: number | null;
+  light_sleep_s?: number | null;
+  rem_sleep_s?: number | null;
+  awake_sleep_s?: number | null;
+  deep_min?: number | null;
+  light_min?: number | null;
+  rem_min?: number | null;
+  awake_min?: number | null;
   body_battery: number | null;
+  bb_highest?: number | null;
+  bb_at_wake?: number | null;
+  bb_charged?: number | null;
+  bb_drained?: number | null;
   resting_hr: number | null;
+  resting_hr_avg_7d?: number | null;
   stress_avg: number | null;
   load_anaerobic: number | null;
   load_aerobic_low: number | null;
   load_aerobic_high: number | null;
+  acute_load?: number | null;
+  chronic_load?: number | null;
+  acwr_ratio?: number | null;
+  acwr_status?: string;
+  training_status_phrase?: string;
+  sleep_scores_breakdown?: Record<string, string>;
+  spo2_avg?: number | null;
+  respiration_avg?: number | null;
+  sleep_stress_avg?: number | null;
+  load_aerobic_low_min?: number;
+  load_aerobic_low_max?: number;
+  load_aerobic_high_min?: number;
+  load_aerobic_high_max?: number;
+  load_anaerobic_min?: number;
+  load_anaerobic_max?: number;
+  training_balance_feedback?: string;
   consecutive_run_days: number;
   source: 'garmlink_mcp' | 'manual';
   synced_at: string;
@@ -195,12 +290,42 @@ export interface DailyWorkout {
   name: string;
   workout_type: WorkoutType;
   distance_miles: number;
+  warmup_miles?: number;
+  main_miles?: number;
+  cooldown_miles?: number;
   pace_target: string;
   hr_cap: string;
   description: string;
   injury_prevention_note: string;
   ai_generated?: boolean;
   adaptation_reason?: string;
+}
+
+export interface RunnerProfile {
+  name: string;
+  units: 'mi' | 'km';
+  benchmark_dist_m: number;
+  benchmark_label: string;
+  benchmark_time_s: number;
+  benchmark_time_fmt: string;
+  vdot: number;
+  weekly_miles: number;
+  primary_focus: TrainingFocusId;
+  is_owner: boolean;
+  onboarded: boolean;
+}
+
+export interface CustomRace {
+  id: string;
+  name: string;
+  dist: string; // e.g. "5K", "10K", "Half Marathon", "Mile", "Custom"
+  distance_m: number;
+  date: string; // YYYY-MM-DD
+  day_of_week: string; // "Thursday"
+  city_zip?: string;
+  surface: SurfaceType;
+  elevation_gain_ft: number;
+  notes?: string;
 }
 
 export interface TrainingPlan {
@@ -236,6 +361,8 @@ export interface WatchActivity {
   max_hr: number | null;
   elevation_gain_ft: number;
   avg_cadence: number | null;
+  aerobic_te?: number;
+  anaerobic_te?: number;
   source: 'garmlink_mcp' | 'file_import';
   source_label: string;
 }

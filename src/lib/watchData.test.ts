@@ -21,7 +21,7 @@ test('normalizeGarmlinkActivities parses MCP text JSON tool payloads cleanly', (
           activities: [
             {
               activityId: 987654,
-              activityName: 'Newark Easy Base Run',
+              activityName: 'Dover Running',
               activityType: { typeKey: 'running' },
               startTimeLocal: '2026-11-21 08:15:00',
               distance: 8046.7,
@@ -39,7 +39,7 @@ test('normalizeGarmlinkActivities parses MCP text JSON tool payloads cleanly', (
 
   const acts = normalizeGarmlinkActivities(mcpResult);
   assert.equal(acts.length, 1);
-  assert.equal(acts[0].name, 'Newark Easy Base Run');
+  assert.equal(acts[0].name, 'Dover Running');
   assert.equal(acts[0].date, '2026-11-21');
   assert.equal(acts[0].avg_hr, 141);
   assert.equal(acts[0].elevation_gain_ft, 105);
@@ -87,7 +87,7 @@ test('normalizeGarmlinkPrs maps Garmin PR typeIds into RaceKit efforts', () => {
     ],
   });
   assert.equal(prs.length, 2);
-  assert.equal(prs[0].label, 'Mile');
+  assert.equal(prs[0].label, '1 Mile');
   assert.equal(prs[1].label, '5K');
   assert.equal(prs[1].time_s, 1144.75);
 });

@@ -22,6 +22,7 @@ export const STANDARD_DISTANCES: Record<string, number> = {
   '1000m': 1000,
   '1500m': 1500,
   '1600m': 1600,
+  '1 Mile': 1609.344,
   Mile: 1609.344,
   '3000m': 3000,
   '3200m': 3200,
@@ -37,7 +38,7 @@ export const PRIMARY_DISTANCES = [
   '800m',
   '1500m',
   '1600m',
-  'Mile',
+  '1 Mile',
   '3000m',
   '3200m',
   '5K',
@@ -47,10 +48,15 @@ export const PRIMARY_DISTANCES = [
 ];
 
 export const ROTATION_SHOES: ShoeId[] = [
-  'streakfly',
-  'dragonfly_xc',
-  'vaporfly_next2',
   'dragonfly_track',
+  'dragonfly_elite',
+  'victory_2',
+  'avanti_tyo',
+  'fuelcell_sc_ldx',
+  'dragonfly_xc',
+  'rival_xc_7',
+  'streakfly',
+  'vaporfly_next2',
   'nb_1080',
 ];
 
@@ -81,34 +87,43 @@ export function formatPace(secPerMile: number | null | undefined): string {
 // ── Condition Adjustment Functions (% change: + slower, - faster) ──────────
 
 export function temperatureAdjustment(tempF: number, distanceM: number): number {
-  const optimal = 48.0;
-  if (tempF <= optimal) {
-    return tempF < 20 ? (20 - tempF) * 0.1 : 0.0;
+  // Optimal distance running temperature window is 40°F–55°F (0.0% penalty)
+  if (tempF >= 40 && tempF <= 55) {
+    return 0.0;
   }
-  const excess = tempF - optimal;
+  if (tempF < 40) {
+    // Cool/cold temps (30°F–39°F) carry minimal penalty: ~0.1%–0.3% (+1–4s on 5K, not +10s)
+    if (tempF < 20) {
+      return 0.5 + (20 - tempF) * 0.06;
+    }
+    return (40 - tempF) * 0.025; // at 32°F: (40-32)*0.025 = +0.20%
+  }
+  // Warm/Hot conditions (>55°F)
+  const excess = tempF - 55;
   const baseRate =
     distanceM <= 1650
-      ? 0.1
+      ? 0.06
       : distanceM <= 5000
-        ? 0.16
+        ? 0.08
         : distanceM <= 10000
-          ? 0.22
+          ? 0.14
           : distanceM <= 21097
-            ? 0.3
-            : 0.4;
+            ? 0.22
+            : 0.30;
   const linearPenalty = excess * baseRate;
   const extremeHeat = Math.max(0, tempF - 80);
-  const nonLinearPenalty = 0.02 * extremeHeat * extremeHeat * (distanceM <= 5000 ? 1.0 : 1.2);
+  const nonLinearPenalty = 0.015 * extremeHeat * extremeHeat * (distanceM <= 5000 ? 1.0 : 1.2);
   return linearPenalty + nonLinearPenalty;
 }
 
 export function humidityAdjustment(humidityPct: number, tempF: number): number {
-  if (tempF < 55 || humidityPct < 50) return 0.0;
+  // High humidity does NOT impair cooling below 60°F (evaporation is not heat-limiting in cold air)
+  if (tempF < 60 || humidityPct < 50) return 0.0;
   const excessHumid = humidityPct - 50;
-  const excessTemp = tempF - 55;
-  const baseInter = excessHumid * excessTemp * 0.0028;
+  const excessTemp = tempF - 60;
+  const baseInter = excessHumid * excessTemp * 0.0018;
   if (tempF > 80 && humidityPct > 70) {
-    const surge = ((tempF - 80) / 20) * ((humidityPct - 70) / 30) * 8.0;
+    const surge = ((tempF - 80) / 20) * ((humidityPct - 70) / 30) * 5.0;
     return baseInter + surge;
   }
   return baseInter;
@@ -116,20 +131,30 @@ export function humidityAdjustment(humidityPct: number, tempF: number): number {
 
 export function windAdjustment(windMph: number, direction: WindDirection): number {
   if (windMph < 2) return 0.0;
-  if (direction === 'head') return 0.22 * windMph + 0.0035 * windMph * windMph;
-  if (direction === 'tail') {
-    return Math.max(-(0.08 * windMph - 0.0006 * windMph * windMph), -3.8);
+  if (direction === 'head') {
+    // Pure headwind capped and scaled realistically (~1.5%–2.8% for 15–22 mph)
+    return Math.min(0.08 * windMph + 0.0018 * windMph * windMph, 4.5);
   }
-  if (direction === 'cross') return 0.08 * windMph + 0.0012 * windMph * windMph;
-  return 0.07 * windMph + 0.0018 * windMph * windMph;
+  if (direction === 'tail') {
+    // Tailwind benefit (-0.5% to -1.2%)
+    return Math.max(-(0.035 * windMph + 0.0004 * windMph * windMph), -1.5);
+  }
+  if (direction === 'cross') {
+    return 0.03 * windMph + 0.0008 * windMph * windMph;
+  }
+  // Loop / Out-and-Back (Mixed): headwind is partially offset by tailwind/sheltered segments
+  // (+0.3% to +1.0% for 15–22 mph, e.g. ~3–11s on 18:30 5K)
+  return 0.025 * windMph + 0.0007 * windMph * windMph;
 }
 
 export function elevationAdjustment(
   gainFt: number,
   lossFt: number | null | undefined,
-  distanceM: number
+  distanceM: number,
+  surface?: SurfaceType
 ): number {
   if (distanceM <= 0) return 0.0;
+  if (surface === 'track' || (gainFt <= 0 && (!lossFt || lossFt <= 0))) return 0.0;
   const gainM = gainFt * 0.3048;
   const lossM = (lossFt ?? gainFt) * 0.3048;
   const distanceFactor = Math.pow(5000 / distanceM, 0.4);
@@ -153,44 +178,77 @@ export function surfaceAdjustment(surface: SurfaceType): number {
   return penalties[surface] ?? 0.0;
 }
 
+export function normalizeSurface(surface: string | undefined | null): SurfaceType {
+  const s = String(surface ?? '').toLowerCase().trim();
+  if (s.includes('track')) return 'track';
+  if (s.includes('xc') || s.includes('cross') || s.includes('grass')) return 'xc';
+  if (s.includes('trail')) return 'trail';
+  if (s.includes('gravel')) return 'gravel';
+  if (s.includes('treadmill')) return 'treadmill';
+  return 'road';
+}
+
 export function shoeAdjustment(shoe: ShoeId, surface: SurfaceType): number {
-  if (surface === 'track') {
-    const map: Record<ShoeId, number> = {
-      dragonfly_track: -3.5,
-      dragonfly_xc: -2.8,
-      streakfly: -2.6,
-      vaporfly_next2: -1.8,
-      nb_1080: 1.6,
-    };
-    return map[shoe] ?? 0;
-  }
-  if (surface === 'xc' || surface === 'grass') {
-    const map: Record<ShoeId, number> = {
-      dragonfly_xc: -3.9,
-      dragonfly_track: -3.3,
-      streakfly: -2.6,
-      nb_1080: -0.7,
-      vaporfly_next2: 0.0,
-    };
-    return map[shoe] ?? 0;
-  }
-  if (surface === 'trail' || surface === 'gravel') {
-    const map: Record<ShoeId, number> = {
+  const norm = normalizeSurface(surface);
+  if (norm === 'track') {
+    const map: Record<string, number> = {
+      dragonfly_elite: -3.2,
+      victory_2: -3.0,
+      dragonfly_track: -2.8,
+      fuelcell_sc_ldx: -2.6,
+      avanti_tyo: -2.5,
       dragonfly_xc: -2.0,
+      rival_xc_7: -1.8,
+      streakfly: -1.5,
+      vaporfly_next2: -1.2,
+      nb_1080: 0.6,
+    };
+    return map[shoe] ?? -1.5;
+  }
+  if (norm === 'xc' || norm === 'grass') {
+    const map: Record<string, number> = {
+      dragonfly_xc: -2.5,
+      rival_xc_7: -2.2,
+      dragonfly_elite: -1.9,
+      dragonfly_track: -1.8,
+      fuelcell_sc_ldx: -1.7,
+      avanti_tyo: -1.7,
+      victory_2: -1.6,
+      streakfly: -1.2,
+      vaporfly_next2: -0.4,
+      nb_1080: 0.6,
+    };
+    return map[shoe] ?? -1.2;
+  }
+  if (norm === 'trail' || norm === 'gravel') {
+    const map: Record<string, number> = {
+      dragonfly_xc: -1.0,
+      rival_xc_7: -1.0,
       streakfly: -0.5,
-      nb_1080: 0.8,
-      vaporfly_next2: 1.5,
-      dragonfly_track: 6.0,
+      vaporfly_next2: -0.2,
+      nb_1080: 0.4,
+      dragonfly_track: 1.2,
+      dragonfly_elite: 1.2,
+      victory_2: 1.5,
+      avanti_tyo: 1.2,
+      fuelcell_sc_ldx: 1.2,
     };
     return map[shoe] ?? 0;
   }
-  // Road / treadmill default
-  const map: Record<ShoeId, number> = {
-    streakfly: -3.0,
-    vaporfly_next2: -2.0,
-    nb_1080: 1.6,
-    dragonfly_xc: 8.0,
-    dragonfly_track: 10.0,
+  // Road / asphalt / treadmill default
+  // Racing shoes & road super-shoes provide ~1.5%–1.8% economy benefit over daily trainers
+  // Metal pin spikes on asphalt road have a 2.0%–3.0% hazard/braking penalty
+  const map: Record<string, number> = {
+    streakfly: -1.8,
+    vaporfly_next2: -1.6,
+    nb_1080: 0.2,
+    dragonfly_xc: 2.0,
+    rival_xc_7: 2.0,
+    dragonfly_track: 2.5,
+    dragonfly_elite: 2.8,
+    victory_2: 3.0,
+    avanti_tyo: 2.5,
+    fuelcell_sc_ldx: 2.5,
   };
   return map[shoe] ?? 0;
 }
@@ -212,24 +270,26 @@ export function readinessAdjustment(
   let total = 0;
   const hrvPenalties: Record<HrvStatus, number> = {
     BALANCED: 0.0,
-    LOW: 1.0,
-    UNBALANCED: 1.5,
-    POOR: 2.5,
+    LOW: 0.6,
+    UNBALANCED: 0.8,
+    POOR: 1.2,
   };
   total += hrvPenalties[hrvStatus] ?? 0.0;
 
   if (sleepScore != null) {
-    if (sleepScore >= 80) total -= 0.3;
-    else if (sleepScore < 40) total += 2.0;
-    else if (sleepScore < 60) total += 1.0;
+    if (sleepScore >= 80) total -= 0.2;
+    else if (sleepScore < 40) total += 0.8;
+    else if (sleepScore < 60) total += 0.5;
   }
 
   if (bodyBattery != null) {
-    if (bodyBattery >= 80) total -= 0.5;
-    else if (bodyBattery < 25) total += 2.5;
-    else if (bodyBattery < 50) total += 1.0;
+    if (bodyBattery >= 80) total -= 0.2;
+    else if (bodyBattery < 25) total += 0.8;
+    else if (bodyBattery < 50) total += 0.4;
+    else if (bodyBattery < 65) total += 0.1;
   }
-  return total;
+  // Realistic readiness derating capped strictly to [0.0%, 2.0%]
+  return Math.max(0.0, Math.min(2.0, Number(total.toFixed(1))));
 }
 
 // ── Multi-Model Ensemble Prediction Engine ─────────────────────────────────
@@ -247,18 +307,23 @@ export class PredictionEngine {
   mileEffort: Effort | null = null;
   fiveKEffort: Effort | null = null;
   effectiveVdot: number | null = null;
+  vdotSource: 'race_pr' | 'garmin_race_prediction' | 'garmin_vo2max' | null = null;
+  garminPredictions: { time_5k_s?: number | null; time_10k_s?: number | null } | null = null;
 
   constructor(
     efforts: Effort[],
     vo2max: number | null = null,
     volume: VolumeProfile = { longest_run_miles: 8.91, avg_weekly_miles: 17.1 },
-    recencyHalflifeDays = 60
+    recencyHalflifeDays = 60,
+    garminPredictions: { time_5k_s?: number | null; time_10k_s?: number | null } | null = null
   ) {
+    this.garminPredictions = garminPredictions;
     this.efforts = [...efforts].sort((a, b) => a.distance_m - b.distance_m);
     this.vo2max = vo2max;
     this.volume = volume;
     this.recencyHalflifeDays = recencyHalflifeDays;
     this.fitModels();
+    this.resolveVdot();
   }
 
   private recencyWeight(dateStr: string): number {
@@ -296,11 +361,13 @@ export class PredictionEngine {
       this.bMileTo5k = 1.08;
     }
 
+    // Fit Critical Speed (CS) and D-prime ONLY from verified race distances >= 1500m (Mile, 5K, 10K)
+    // Never fit CS or D-prime from short track intervals/sprints (< 1500m)
     let csEfforts = this.efforts.filter(
-      (e) => e.distance_m >= 800 && e.distance_m <= 12000 && e.time_s >= 120 && e.time_s <= 3600
+      (e) => e.distance_m >= 1500 && e.distance_m <= 12000 && e.time_s >= 240 && e.time_s <= 3600
     );
     if (csEfforts.length < 2) {
-      csEfforts = this.efforts.slice(0, Math.min(this.efforts.length, 4));
+      csEfforts = this.efforts.filter((e) => e.distance_m >= 1500);
     }
 
     if (csEfforts.length >= 2) {
@@ -347,19 +414,52 @@ export class PredictionEngine {
           this.csR2 = ssTot > 0 ? 1 - ssRes / ssTot : 0.99;
         }
       }
+    } else if (csEfforts.length === 1) {
+      // Derive sustainable CS anchor from the single verified race effort (e.g. 5K)
+      const e = csEfforts[0];
+      const cs = (e.distance_m / e.time_s) * (e.distance_m >= 5000 ? 0.92 : 0.88);
+      this.cs = cs;
+      this.dPrime = Math.max(100, e.distance_m - cs * e.time_s);
+      this.csR2 = 0.95;
     }
 
-    const vdots = this.efforts
-      .map((e) => this.vdotFromPerformance(e.distance_m, e.time_s))
-      .filter((v): v is number => v !== null);
-    if (vdots.length > 0) {
-      this.effectiveVdot = Math.max(...vdots);
-    } else if (this.vo2max) {
-      this.effectiveVdot = this.vo2max;
+  }
+
+  private resolveVdot() {
+    // VDOT source priority (never short track intervals < 1500m):
+    //   1. Verified race-distance PRs (5K preferred, then the PR closest to 5K: 10K / 1 Mile)
+    //   2. Garmin watch race prediction (garmlink_race_predictions_get: 5K, then 10K)
+    //   3. Garmin running VO2max (garmlink_vo2max_history)
+    const raceEfforts = this.efforts.filter(
+      (e) => e.distance_m >= 1500 && e.distance_m <= 42200 && e.time_s >= 200
+    );
+    const anchor =
+      this.fiveKEffort && this.fiveKEffort.distance_m >= 1500
+        ? this.fiveKEffort
+        : [...raceEfforts].sort(
+            (x, y) => Math.abs(Math.log(x.distance_m / 5000)) - Math.abs(Math.log(y.distance_m / 5000))
+          )[0];
+    const anchorVdot = anchor ? this.vdotFromPerformance(anchor.distance_m, anchor.time_s) : null;
+    const g5k = this.garminPredictions?.time_5k_s;
+    const g10k = this.garminPredictions?.time_10k_s;
+    const garminVdot =
+      (g5k ? this.vdotFromPerformance(5000, g5k) : null) ??
+      (g10k ? this.vdotFromPerformance(10000, g10k) : null);
+
+    if (anchorVdot !== null && anchorVdot >= 20 && anchorVdot <= 90) {
+      this.effectiveVdot = Number(anchorVdot.toFixed(1)); // e.g. 19:04.8 5K -> 52.6
+      this.vdotSource = 'race_pr';
+    } else if (garminVdot !== null && garminVdot >= 20 && garminVdot <= 90) {
+      this.effectiveVdot = Number(garminVdot.toFixed(1));
+      this.vdotSource = 'garmin_race_prediction';
+    } else if (this.vo2max && this.vo2max >= 20 && this.vo2max <= 90) {
+      this.effectiveVdot = Number(this.vo2max.toFixed(1));
+      this.vdotSource = 'garmin_vo2max';
     }
   }
 
-  vdotFromPerformance(distM: number, timeS: number): number | null {
+  /** Raw Jack Daniels / Gilbert VDOT formula (no distance guard — used to invert predictions). */
+  private danielsVdot(distM: number, timeS: number): number | null {
     const tMin = timeS / 60;
     if (tMin <= 0) return null;
     const vMMin = distM / tMin;
@@ -370,6 +470,12 @@ export class PredictionEngine {
     return vo2 / pctMax;
   }
 
+  vdotFromPerformance(distM: number, timeS: number): number | null {
+    // Fitting VDOT is physiologically valid only for race endurance efforts >= 1400m
+    if (distM < 1400 || timeS < 180) return null;
+    return this.danielsVdot(distM, timeS);
+  }
+
   private predictDaniels(distM: number): number | null {
     const vdot = this.effectiveVdot;
     if (!vdot) return null;
@@ -378,7 +484,7 @@ export class PredictionEngine {
     let mid = 300;
     for (let i = 0; i < 50; i++) {
       mid = (low + high) / 2;
-      const vEst = this.vdotFromPerformance(distM, mid);
+      const vEst = this.danielsVdot(distM, mid);
       if (vEst === null) break;
       if (vEst < vdot) high = mid;
       else low = mid;
@@ -390,6 +496,10 @@ export class PredictionEngine {
     const baseEffort = this.mileEffort ?? this.efforts[0];
     if (!baseEffort) return null;
 
+    if (this.fiveKEffort && Math.abs(distM - 5000) < 100) {
+      return this.fiveKEffort.time_s;
+    }
+
     const bBase = this.bMileTo5k ?? 1.1;
     let b: number;
     let refDist = baseEffort.distance_m;
@@ -400,11 +510,11 @@ export class PredictionEngine {
     } else if (distM <= 1609.344) {
       b = 1.06;
     } else if (distM <= 3200) {
-      b = 1.1;
+      b = this.bMileTo5k ?? 1.1;
     } else if (distM <= 5000) {
-      b = bBase * 0.985;
+      b = bBase;
     } else {
-      b = 1.14;
+      b = 1.09;
       if (this.fiveKEffort) {
         refDist = this.fiveKEffort.distance_m;
         refTime = this.fiveKEffort.time_s;
@@ -477,12 +587,12 @@ export class PredictionEngine {
 
     const weightMap: Record<string, number> =
       distanceM <= 850
-        ? { calibrated_riegel: 0.5, critical_speed: 0.3, daniels_vdot: 0.2 }
+        ? { calibrated_riegel: 0.6, critical_speed: 0.2, daniels_vdot: 0.2 }
         : distanceM <= 1650
-          ? { calibrated_riegel: 0.45, critical_speed: 0.35, daniels_vdot: 0.2 }
+          ? { calibrated_riegel: 0.65, critical_speed: 0.1, daniels_vdot: 0.25 }
           : distanceM <= 5500
-            ? { calibrated_riegel: 0.35, critical_speed: 0.3, daniels_vdot: 0.35 }
-            : { calibrated_riegel: 0.45, critical_speed: 0.1, daniels_vdot: 0.45 };
+            ? { calibrated_riegel: 0.55, critical_speed: 0.05, daniels_vdot: 0.4 }
+            : { calibrated_riegel: 0.55, critical_speed: 0.05, daniels_vdot: 0.4 };
 
     const keys = Object.keys(rawModels);
     const totalW = keys.reduce((acc, k) => acc + (weightMap[k] ?? 0.2), 0);
@@ -571,13 +681,14 @@ export class PredictionEngine {
     const d = base.distance_m;
 
     const add = (key: string, val: number) => {
-      if (Math.abs(val) > 0.01) adjustments[key] = Number(val.toFixed(2));
+      const rounded = Number(val.toFixed(1));
+      if (Math.abs(rounded) >= 0.1) adjustments[key] = rounded;
     };
 
     add('temperature', temperatureAdjustment(cond.temperature_f, d));
     add('humidity', humidityAdjustment(cond.humidity_pct, cond.temperature_f));
     add('wind', windAdjustment(cond.wind_mph, cond.wind_direction));
-    add('elevation', elevationAdjustment(cond.elevation_gain_ft, cond.elevation_loss_ft, d));
+    add('elevation', elevationAdjustment(cond.elevation_gain_ft, cond.elevation_loss_ft, d, cond.surface));
     add('surface', surfaceAdjustment(cond.surface));
     add('shoes', shoeAdjustment(cond.shoe_type, cond.surface));
     add('altitude', altitudeAdjustment(cond.altitude_ft, d));
@@ -589,7 +700,7 @@ export class PredictionEngine {
     const totalPct = Number(
       Object.values(adjustments)
         .reduce((a, b) => a + b, 0)
-        .toFixed(2)
+        .toFixed(1)
     );
     const factor = 1 + totalPct / 100;
     const timeS = base.time_s * factor;
@@ -625,11 +736,46 @@ export class PredictionEngine {
   compareShoes(distanceLabel: string, conditions: CourseConditions): ShoeComparison[] {
     const distM = STANDARD_DISTANCES[distanceLabel] ?? 5000;
     const base = this.predictBase(distM, distanceLabel);
+    const surfaceNorm = normalizeSurface(conditions.surface);
+    const isTrack = surfaceNorm === 'track';
+    const isRoadOrTreadmill = surfaceNorm === 'road' || surfaceNorm === 'treadmill';
 
-    const rows = ROTATION_SHOES.map((shoeId) => {
-      const adj = this.applyConditions(base, { ...conditions, shoe_type: shoeId });
+    // On track: filter out dedicated XC muddy spikes
+    // On XC / grass: filter out fragile track sprint/distance spikes without rubber outsoles
+    let candidateShoes = ROTATION_SHOES;
+    if (isTrack) {
+      candidateShoes = ROTATION_SHOES.filter((s) => s !== 'rival_xc_7');
+    } else if (surfaceNorm === 'xc' || surfaceNorm === 'grass') {
+      candidateShoes = ROTATION_SHOES.filter((s) => s !== 'victory_2');
+    }
+
+    const isSpike = (id: string) =>
+      [
+        'dragonfly_track',
+        'dragonfly_elite',
+        'victory_2',
+        'avanti_tyo',
+        'fuelcell_sc_ldx',
+        'dragonfly_xc',
+        'rival_xc_7',
+      ].includes(id);
+
+    const isTrackSpike = (id: string) =>
+      ['dragonfly_track', 'dragonfly_elite', 'victory_2', 'avanti_tyo', 'fuelcell_sc_ldx'].includes(id);
+
+    const isXcSpike = (id: string) =>
+      ['dragonfly_xc', 'rival_xc_7'].includes(id);
+
+    const rows = candidateShoes.map((shoeId) => {
+      const adj = this.applyConditions(base, { ...conditions, surface: surfaceNorm, shoe_type: shoeId });
       const shoePct = adj.adjustments.shoes ?? 0;
-      const info = SHOE_DATABASE[shoeId];
+      const info = SHOE_DATABASE[shoeId] ?? {
+        label: shoeId,
+        short_label: shoeId,
+        default_surface: 'road',
+        weight_g: 200,
+        description: '',
+      };
       return {
         shoe_id: shoeId,
         label: info.label,
@@ -647,14 +793,31 @@ export class PredictionEngine {
     const best = rows[0].time_s;
 
     return rows.map((r, idx) => {
-      const tag: ShoeComparison['tag'] =
-        idx === 0
-          ? 'OPTIMAL'
-          : r.shoe_pct >= 5
-            ? 'SURFACE HAZARD'
-            : r.shoe_pct > 0
-              ? 'TRAINING HEAVY'
-              : 'VIABLE';
+      const isSpikeOnRoad = isRoadOrTreadmill && isSpike(r.shoe_id);
+
+      let tag: ShoeComparison['tag'];
+      if (isSpikeOnRoad) {
+        tag = 'SURFACE HAZARD';
+      } else if (isTrack) {
+        if (isTrackSpike(r.shoe_id)) {
+          tag = 'OPTIMAL';
+        } else if (isXcSpike(r.shoe_id)) {
+          tag = 'VIABLE';
+        } else if (idx === 0) {
+          tag = 'OPTIMAL';
+        } else if (r.shoe_pct <= 0) {
+          tag = 'VIABLE';
+        } else {
+          tag = 'TRAINING HEAVY';
+        }
+      } else if (idx === 0) {
+        tag = 'OPTIMAL';
+      } else if (r.shoe_pct <= 0) {
+        tag = 'VIABLE';
+      } else {
+        tag = 'TRAINING HEAVY';
+      }
+
       return {
         ...r,
         delta_s: Number((r.time_s - best).toFixed(1)),
@@ -810,14 +973,14 @@ export class PredictionEngine {
   }
 
   getTrainingZones(): TrainingZones {
-    const easySlow = this.paceAtVo2Pct(0.64) ?? 520;
-    const easyFast = this.paceAtVo2Pct(0.71) ?? 485;
-    const marathon = this.paceAtVo2Pct(0.81) ?? 435;
-    const thresholdVdot = this.paceAtVo2Pct(0.88) ?? 395;
+    const easySlow = this.paceAtVo2Pct(0.62) ?? 525; // ~8:42/mi at VDOT 52.7
+    const easyFast = this.paceAtVo2Pct(0.70) ?? 475; // ~7:54/mi at VDOT 52.7
+    const marathon = this.paceAtVo2Pct(0.82) ?? 417; // ~6:57/mi at VDOT 52.7
+    const thresholdVdot = this.paceAtVo2Pct(0.89) ?? 390; // ~6:30/mi at VDOT 52.7
     const csPace = this.cs ? 1609.344 / this.cs : thresholdVdot;
-    const threshold = (thresholdVdot + Math.min(csPace, thresholdVdot + 18)) / 2;
-    const interval = this.paceAtVo2Pct(0.98) ?? 350;
-    const rep = this.paceAtVo2Pct(1.07) ?? 320;
+    const threshold = (thresholdVdot * 2 + Math.min(csPace, thresholdVdot + 10)) / 3;
+    const interval = this.paceAtVo2Pct(0.985) ?? 359; // ~5:59/mi at VDOT 52.7
+    const rep = this.paceAtVo2Pct(1.072) ?? 335; // ~5:35/mi at VDOT 52.7
     const rep400S = rep / 4.02336;
 
     return {

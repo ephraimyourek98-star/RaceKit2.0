@@ -52,13 +52,13 @@ test('Volume durability flags 5K as READY and Marathon as HIGH BONK RISK on 17 m
   assert.ok(predMarathon.volume_penalty_pct > 25);
 });
 
-test('5-Shoe Matrix ranks Streakfly #1 on Road and Dragonfly XC #1 on XC grass', () => {
+test('Shoe Rotation Matrix ranks Streakfly #1 on Road and Dragonfly XC #1 on XC grass', () => {
   const engine = new PredictionEngine(VERIFIED_PR_EFFORTS, 53.2);
   const roadMatrix = engine.compareShoes('5K', { ...BASE_CONDITIONS, surface: 'road' });
   assert.equal(roadMatrix[0].shoe_id, 'streakfly');
   assert.equal(roadMatrix[0].tag, 'OPTIMAL');
-  const trackSpikeOnRoad = roadMatrix.find((s) => s.shoe_id === 'dragonfly_track');
-  assert.equal(trackSpikeOnRoad?.tag, 'SURFACE HAZARD');
+  const spikeOnRoad = roadMatrix.find((s) => s.shoe_id === 'dragonfly_xc');
+  assert.equal(spikeOnRoad?.tag, 'SURFACE HAZARD');
 
   const xcMatrix = engine.compareShoes('5K', { ...BASE_CONDITIONS, surface: 'xc' });
   assert.equal(xcMatrix[0].shoe_id, 'dragonfly_xc');

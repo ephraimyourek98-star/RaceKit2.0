@@ -2,38 +2,41 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
-  --font-sans: "DM Sans", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  --font-mono: "SF Mono", Monaco, Menlo, Consolas, "Courier New", monospace;
 }
 
 @layer base {
   body {
     font-family: var(--font-sans);
-    background-color: #090d12;
-    color: #f3f6fa;
-    letter-spacing: 0.005em;
+    background-color: #000000;
+    color: #F2F2F7;
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   h1, h2, h3, h4 {
     font-family: var(--font-display);
+    letter-spacing: -0.02em;
     text-wrap: balance;
   }
 
-  /* Custom subtle dark scrollbar */
+  /* Authentic Apple Dark subtle scrollbar */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: #090d12;
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #222d3d;
-    border-radius: 3px;
+    background: #3A3A3C;
+    border-radius: 9999px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #33435a;
+    background: #48484A;
   }
 }
 
@@ -41,32 +44,33 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Range slider styling for condition controls */
+/* Range slider styling for condition controls in Apple iOS Dark style */
 input[type="range"].racekit-slider {
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
-  background: #222d3d;
-  border-radius: 2px;
+  background: #3A3A3C;
+  border-radius: 9999px;
   outline: none;
 }
 
 input[type="range"].racekit-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #38bdf8;
+  background: #FFFFFF;
   cursor: pointer;
-  border: 2px solid #090d12;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
   transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 input[type="range"].racekit-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
+  transform: scale(1.1);
 }
 
 input[type="range"].racekit-slider:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.35);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.4);
 }

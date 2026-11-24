@@ -1,8 +1,26 @@
 node_modules/
-build/
 dist/
+build/
 coverage/
 .DS_Store
 *.log
-.env*
+
+# Environment and secrets
+.env
+.env.*
 !.env.example
+.garmlink-sessions.json
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+.env
+.env.*
+*.db
+*.sqlite*
+node_modules/
+dist/
+__pycache__/
+*.py[cod]

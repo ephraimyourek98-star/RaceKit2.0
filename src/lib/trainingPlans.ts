@@ -999,3 +999,53 @@ const remainingSet = new Set(days.slice(startIdx).map((d) => d.toLowerCase()));
 return schedule.filter((item) => (item.day ? remainingSet.has(item.day.toLowerCase()) : true));
 }
 
+
+export function normalizeDayName(day?: string | null): string | null {
+if (!day) return null;
+const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const cleaned = day.trim().toLowerCase();
+const match = days.find((d) => d.toLowerCase() === cleaned || d.toLowerCase().startsWith(cleaned));
+return match ?? null;
+}
+
+export function getRemainingDaysOfWeek(todayDay?: string): string[] {
+const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const startDay =
+normalizeDayName(todayDay) ?? days[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
+const startIdx = days.indexOf(startDay);
+return startIdx >= 0 ? days.slice(startIdx) : days;
+}
+
+export function parseDayTargetedPrompt(prompt: string, fallbackDay?: string) {
+const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const lower = prompt.toLowerCase();
+const matchedDay =
+days.find((d) => new RegExp(`\\b${d.toLowerCase()}\\b`).test(lower)) ??
+normalizeDayName(fallbackDay) ??
+days[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
+
+const milesMatch = prompt.match(/(\d+(?:\.\d+)?)\s*(?:mi|miles|m\b)/i);
+const kmMatch = prompt.match(/(\d+(?:\.\d+)?)\s*(?:km|k\b)/i);
+const distanceMiles = milesMatch
+? parseFloat(milesMatch[1])
+: kmMatch
+? Number((parseFloat(kmMatch[1]) * 0.621371).toFixed(2))
+: undefined;
+
+let workoutType: string = "easy";
+if (/\b(rest|off)\b/i.test(lower)) workoutType = "rest";
+else if (/\b(interval|speed|track|repeat|800m|400m|1000m|mile repeat)\b/i.test(lower)) workoutType = "intervals";
+else if (/\b(tempo|threshold|lactate)\b/i.test(lower)) workoutType = "tempo";
+else if (/\b(long run|long)\b/i.test(lower)) workoutType = "long";
+else if (/\b(race|time trial|5k|10k|half|marathon)\b/i.test(lower)) workoutType = "race";
+else if (/\b(cross.?train|bike|cycling|swim|strength|lift|yoga|row)\b/i.test(lower)) workoutType = "cross_train";
+else if (/\b(quality|harder|workout)\b/i.test(lower)) workoutType = "tempo";
+else if (/\b(recovery|shakeout)\b/i.test(lower)) workoutType = "recovery";
+
+return {
+day: matchedDay,
+workoutType,
+distanceMiles,
+prompt,
+};
+}

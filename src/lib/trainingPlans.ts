@@ -984,3 +984,18 @@ export function enforceRecoveryGate(
     schedule,
   };
 }
+
+export function filterRemainingSchedule<T extends { day?: string }>(
+schedule: T[],
+todayDay?: string
+): T[] {
+const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const startDay = todayDay
+? days.find((d) => d.toLowerCase() === todayDay.toLowerCase())
+: days[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
+const startIdx = startDay ? days.indexOf(startDay) : 0;
+if (startIdx <= 0) return schedule;
+const remainingSet = new Set(days.slice(startIdx).map((d) => d.toLowerCase()));
+return schedule.filter((item) => (item.day ? remainingSet.has(item.day.toLowerCase()) : true));
+}
+

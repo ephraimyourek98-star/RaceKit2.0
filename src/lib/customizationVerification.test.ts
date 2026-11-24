@@ -385,3 +385,70 @@ test('Bug 2 Fix: Modify Day prompts ("harder workout", "quality session") update
   );
   assert.equal(updatedStats.totalMiles, finalPlan.weekly_mileage);
 });
+
+
+test('User Request 4 Regression: Past days excluded, Modify Day stays pinned under low HRV, and no-rest/intensity preserved', () => {
+  const z = engine.getTrainingZones();
+  const base = generateTrainingPlan('track_mid', z, null);
+
+  // 1. Past days (e.g. Monday when today is Tuesday) never return after finalization or focus switch
+  const remainingTue = finalizePlanSchedule(base, { name: 'Run for Pie 5K', dist: '5K', day: 'Thursday' }, {
+    todayDay: 'Tuesday',
+    remainingOnly: true,
+  });
+  assert.equal(remainingTue.schedule.some((w) => w.day === 'Monday'), false);
+  assert.deepEqual(
+    remainingTue.schedule.map((w) => w.day),
+    ['Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  );
+
+  // 2. Modify Day "harder workout today" on Tuesday stays workout & pinned despite low HRV in DEFAULT_GARMLINK_HEALTH
+  const parsed = parseDayTargetedPrompt('harder workout today', 'Tuesday', z);
+  assert.equal(parsed.day, 'Tuesday');
+  assert.equal(parsed.workout_type, 'workout');
+  const pinnedTuesday: DailyWorkout = {
+    day: 'Tuesday',
+    name: parsed.name,
+    workout_type: parsed.workout_type,
+    distance_miles: parsed.distance_miles,
+    warmup_miles: parsed.warmup_miles,
+    main_miles: parsed.main_miles,
+    cooldown_miles: parsed.cooldown_miles,
+    pace_target: parsed.pace_target,
+    hr_cap: parsed.hr_cap,
+    description: parsed.description,
+    injury_prevention_note: parsed.injury_prevention_note,
+    ai_generated: true,
+    is_pinned: true,
+    user_customized: true,
+    adaptation_reason: parsed.reason,
+  };
+  const withModifiedTue: TrainingPlan = {
+    ...remainingTue,
+    schedule: remainingTue.schedule.map((w) => (w.day === 'Tuesday' ? pinnedTuesday : w)),
+  };
+  const lowHrvHealth: HealthSnapshot = {
+    ...DEFAULT_GARMLINK_HEALTH,
+    hrv_last_night: 32,
+    hrv_baseline_low: 48,
+    sleep_score: 54,
+  };
+  const afterGate = finalizePlanSchedule(
+    enforceRecoveryGate(withModifiedTue, lowHrvHealth, 'Tuesday'),
+    null,
+    { todayDay: 'Tuesday', remainingOnly: true }
+  );
+  const tueCard = afterGate.schedule.find((w) => w.day === 'Tuesday');
+  assert.equal(tueCard?.workout_type, 'workout');
+  assert.equal(tueCard?.name, parsed.name);
+  assert.equal(tueCard?.distance_miles, parsed.distance_miles);
+  assert.ok(tueCard?.injury_prevention_note.includes('Advisory:'));
+
+  // 3. No-rest / honorExplicitIntensity keeps zero rest days and preserves quality workout today
+  const noRestPlan = finalizePlanSchedule(
+    enforceRecoveryGate(remainingTue, lowHrvHealth, 'Tuesday', { honorExplicitIntensity: true }),
+    null,
+    { todayDay: 'Tuesday', remainingOnly: true, maxAutoRest: 0 }
+  );
+  assert.equal(noRestPlan.schedule.filter((w) => w.workout_type === 'rest').length, 0);
+});

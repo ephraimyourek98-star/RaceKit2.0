@@ -34,6 +34,35 @@ export const STANDARD_DISTANCES: Record<string, number> = {
   Marathon: 42195,
 };
 
+/** Parse any standard label or numeric distance string (m, km/k, mi/miles) into meters. */
+export function parseDistanceMeters(distanceInput: string | number | null | undefined): number {
+  if (typeof distanceInput === 'number') {
+    return Number.isFinite(distanceInput) && distanceInput > 0 ? distanceInput : 5000;
+  }
+  const raw = String(distanceInput ?? '').trim();
+  if (!raw) return 5000;
+
+  for (const [label, meters] of Object.entries(STANDARD_DISTANCES)) {
+    if (label.toLowerCase() === raw.toLowerCase()) return meters;
+  }
+
+  const lower = raw.toLowerCase();
+  if (lower === 'half' || lower === '13.1' || lower === '13.1mi' || lower === '13.1 mi') return 21097.5;
+  if (lower === 'full' || lower === '26.2' || lower === '26.2mi' || lower === '26.2 mi') return 42195;
+
+  const numMatch = lower.match(/^(\d+(?:\.\d+)?)\s*(meters?|m|kilometers?|kms?|km|k|miles?|mi)?$/i);
+  if (numMatch) {
+    const val = Number.parseFloat(numMatch[1]);
+    if (Number.isFinite(val) && val > 0) {
+      const unit = (numMatch[2] || 'm').toLowerCase();
+      if (unit.startsWith('mi') || (unit === 'm' && val < 50)) return val * 1609.344;
+      if (unit.startsWith('k')) return val * 1000;
+      return val;
+    }
+  }
+  return 5000;
+}
+
 export const PRIMARY_DISTANCES = [
   '800m',
   '1500m',
@@ -724,7 +753,7 @@ export class PredictionEngine {
   }
 
   predict(distanceLabel: string, conditions: CourseConditions): RacePrediction {
-    const distM = STANDARD_DISTANCES[distanceLabel] ?? 5000;
+    const distM = parseDistanceMeters(distanceLabel);
     const base = this.predictBase(distM, distanceLabel);
     return this.applyConditions(base, conditions);
   }
@@ -734,7 +763,7 @@ export class PredictionEngine {
   }
 
   compareShoes(distanceLabel: string, conditions: CourseConditions): ShoeComparison[] {
-    const distM = STANDARD_DISTANCES[distanceLabel] ?? 5000;
+    const distM = parseDistanceMeters(distanceLabel);
     const base = this.predictBase(distM, distanceLabel);
     const surfaceNorm = normalizeSurface(conditions.surface);
     const isTrack = surfaceNorm === 'track';

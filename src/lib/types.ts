@@ -33,7 +33,7 @@ export type TrainingFocusId =
   | 'half_marathon'
   | 'base_building';
 
-export type WorkoutType = 'easy' | 'workout' | 'long_run' | 'recovery' | 'rest' | 'race';
+export type WorkoutType = 'easy' | 'workout' | 'long_run' | 'recovery' | 'rest' | 'race' | 'cross_train';
 
 export interface Effort {
   id: string;
@@ -299,6 +299,8 @@ export interface DailyWorkout {
   injury_prevention_note: string;
   ai_generated?: boolean;
   adaptation_reason?: string;
+  is_pinned?: boolean;
+  user_customized?: boolean;
 }
 
 export interface RunnerProfile {

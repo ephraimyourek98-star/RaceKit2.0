@@ -39,6 +39,40 @@ export const supabase = isSupabaseConfigured
 const DEMO_USER_ID = 'demo-guest-preview';
 const ACTIVE_SESSION_KEY = 'racekit_active_session';
 
+const memoryFallbackStorage = new Map<string, string>();
+const safeStorage = {
+  getItem(key: string): string | null {
+    try {
+      if (typeof localStorage !== 'undefined') return localStorage.getItem(key);
+    } catch {
+      // fall through
+    }
+    return memoryFallbackStorage.get(key) ?? null;
+  },
+  setItem(key: string, value: string): void {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, value);
+        return;
+      }
+    } catch {
+      // fall through
+    }
+    memoryFallbackStorage.set(key, value);
+  },
+  removeItem(key: string): void {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(key);
+        return;
+      }
+    } catch {
+      // fall through
+    }
+    memoryFallbackStorage.delete(key);
+  },
+};
+
 // ── Authentication API ─────────────────────────────────────────────────────
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
@@ -69,7 +103,7 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
 
   // Check if active session is an explicit Demo Mode session
   try {
-    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+    const raw = safeStorage.getItem(ACTIVE_SESSION_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as UserProfile;
       if (parsed && parsed.is_demo) {
@@ -246,7 +280,7 @@ export function startDemoModeSession(): UserProfile {
     longest_run_miles: 8.5,
     created_at: new Date().toISOString(),
   };
-  localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(demoProfile));
+  safeStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(demoProfile));
   return demoProfile;
 }
 
@@ -258,7 +292,7 @@ export async function signOutUser(): Promise<void> {
       // ignore
     }
   }
-  localStorage.removeItem(ACTIVE_SESSION_KEY);
+  safeStorage.removeItem(ACTIVE_SESSION_KEY);
 }
 
 // ── Per-User Data Isolation Helpers ────────────────────────────────────────
@@ -273,7 +307,7 @@ export function loadUserWorkouts(
 ): Record<string, DailyWorkout> {
   try {
     const key = getUserStorageKey(userId, `workouts_${focus}`);
-    const raw = localStorage.getItem(key);
+    const raw = safeStorage.getItem(key);
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
@@ -287,7 +321,7 @@ export function saveUserWorkouts(
 ): void {
   try {
     const key = getUserStorageKey(userId, `workouts_${focus}`);
-    localStorage.setItem(key, JSON.stringify(workouts));
+    safeStorage.setItem(key, JSON.stringify(workouts));
   } catch (err) {
     console.warn(`Failed to save workouts for user ${userId}:`, err);
   }
@@ -296,7 +330,7 @@ export function saveUserWorkouts(
 export function loadUserTargetRace(userId: string): { name: string; dist: string; day: string } | null {
   try {
     const key = getUserStorageKey(userId, 'target_race');
-    const raw = localStorage.getItem(key);
+    const raw = safeStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -310,9 +344,9 @@ export function saveUserTargetRace(
   try {
     const key = getUserStorageKey(userId, 'target_race');
     if (race) {
-      localStorage.setItem(key, JSON.stringify(race));
+      safeStorage.setItem(key, JSON.stringify(race));
     } else {
-      localStorage.removeItem(key);
+      safeStorage.removeItem(key);
     }
   } catch (err) {
     console.warn(`Failed to save target race for user ${userId}:`, err);
@@ -322,7 +356,7 @@ export function saveUserTargetRace(
 export function loadUserPRs(userId: string): Effort[] | null {
   try {
     const key = getUserStorageKey(userId, 'prs');
-    const raw = localStorage.getItem(key);
+    const raw = safeStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -332,7 +366,7 @@ export function loadUserPRs(userId: string): Effort[] | null {
 export function saveUserPRs(userId: string, prs: Effort[]): void {
   try {
     const key = getUserStorageKey(userId, 'prs');
-    localStorage.setItem(key, JSON.stringify(prs));
+    safeStorage.setItem(key, JSON.stringify(prs));
   } catch (err) {
     console.warn(`Failed to save PRs for user ${userId}:`, err);
   }
@@ -341,7 +375,7 @@ export function saveUserPRs(userId: string, prs: Effort[]): void {
 export function loadUserTelemetry(userId: string): { health: HealthSnapshot | null; activities: WatchActivity[] } | null {
   try {
     const key = getUserStorageKey(userId, 'telemetry');
-    const raw = localStorage.getItem(key);
+    const raw = safeStorage.getItem(key);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -354,7 +388,7 @@ export function saveUserTelemetry(
 ): void {
   try {
     const key = getUserStorageKey(userId, 'telemetry');
-    localStorage.setItem(key, JSON.stringify(telemetry));
+    safeStorage.setItem(key, JSON.stringify(telemetry));
   } catch (err) {
     console.warn(`Failed to save telemetry for user ${userId}:`, err);
   }

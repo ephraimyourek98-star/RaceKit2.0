@@ -42,11 +42,16 @@ import {
   VERIFIED_PR_EFFORTS,
 } from './lib/seedData';
 import {
+  DAYS_OF_WEEK,
   TRAINING_FOCUS_LABELS,
   enforceRecoveryGate,
+  filterRemainingSchedule,
   finalizePlanSchedule,
   generateTrainingPlan,
   getTodayDayName,
+  normalizeDayName,
+  parseDayTargetedPrompt,
+  slicePlanToRemainingDays,
 } from './lib/trainingPlans';
 import { computeVolumeFromActivities } from './lib/watchData';
 import type {
@@ -97,9 +102,15 @@ function loadPersistedState() {
       targetRace: { name: string; dist: string; day: string } | null;
       adaptedDays: Record<string, DailyWorkout>;
       adaptedDaysByFocus: Record<TrainingFocusId, Record<string, DailyWorkout>>;
+      customizedDays: Record<string, DailyWorkout>;
       raceDate: string;
       raceTime: string;
     }>;
+
+    if (parsed.aiGeneratedPlan && Array.isArray(parsed.aiGeneratedPlan.schedule)) {
+      const sliced = slicePlanToRemainingDays(parsed.aiGeneratedPlan, getTodayDayName());
+      parsed.aiGeneratedPlan = { ...parsed.aiGeneratedPlan, ...sliced };
+    }
 
     // Correct any stale race date that was pointing to Monday 2026-11-23 instead of Thursday 2026-11-26
     if (!parsed.raceDate || parsed.raceDate === '2026-11-23' || parsed.raceDate < '2026-11-26') {
@@ -336,8 +347,25 @@ export default function App() {
     }
     return {} as Record<TrainingFocusId, Record<string, DailyWorkout>>;
   });
+  const [todayName, setTodayName] = useState<string>(() => getTodayDayName());
+  const [customizedDays, setCustomizedDays] = useState<Record<string, DailyWorkout>>(
+    () => persisted?.customizedDays ?? {}
+  );
   const adaptedDays = adaptedDaysByFocus[planFocus] ?? {};
   const [aiPlanLoading, setAiPlanLoading] = useState(false);
+
+  useEffect(() => {
+    const syncToday = () => {
+      const current = getTodayDayName();
+      setTodayName((prev) => (prev === current ? prev : current));
+    };
+    window.addEventListener('focus', syncToday);
+    document.addEventListener('visibilitychange', syncToday);
+    return () => {
+      window.removeEventListener('focus', syncToday);
+      document.removeEventListener('visibilitychange', syncToday);
+    };
+  }, []);
   const [aiWorkoutLoading, setAiWorkoutLoading] = useState(false);
   const [aiWorkoutDay, setAiWorkoutDay] = useState<string | null>(null);
   const [aiPlanError, setAiPlanError] = useState<string | null>(null);
@@ -444,6 +472,7 @@ export default function App() {
           targetRace,
           adaptedDays,
           adaptedDaysByFocus,
+          customizedDays,
           raceDate,
           raceTime,
         })
@@ -451,7 +480,7 @@ export default function App() {
     } catch {
       // Ignore storage quota issues
     }
-  }, [health, efforts, activities, planFocus, aiGeneratedPlan, targetRace, adaptedDays, adaptedDaysByFocus, raceDate, raceTime]);
+  }, [health, efforts, activities, planFocus, aiGeneratedPlan, targetRace, adaptedDays, adaptedDaysByFocus, customizedDays, raceDate, raceTime]);
 
   // Keep readiness condition fields synced with real health snapshot (zero made-up metrics)
   useEffect(() => {
@@ -785,7 +814,10 @@ export default function App() {
         setCurrentUser(user);
         const userWorkouts = loadUserWorkouts(user.id, planFocus);
         if (Object.keys(userWorkouts).length > 0) {
-          setAdaptedDaysByFocus((prev) => ({ ...prev, [planFocus]: userWorkouts }));
+          setAdaptedDaysByFocus((prev) => ({
+            ...prev,
+            [planFocus]: { ...userWorkouts, ...(prev[planFocus] ?? {}) },
+          }));
         }
         const userTarget = loadUserTargetRace(user.id);
         if (userTarget) {
@@ -804,7 +836,7 @@ export default function App() {
         }
       }
     });
-  }, [planFocus]);
+  }, []);
 
   const handleConnectGarmlink = async () => {
     stopOAuthPolling();
@@ -929,26 +961,68 @@ export default function App() {
     [engine, selectedDistance, conditions]
   );
 
-  // Build active training plan: AI-generated full plan if present, otherwise deterministic template + day overrides
+  // Build active training plan: base + AI plan + adapted overrides + pinned user customizations, strictly remaining days
   const trainingPlan = useMemo(() => {
-    const base = aiGeneratedPlan ?? generateTrainingPlan(planFocus, zones, targetRace);
-    const withAdapted =
-      Object.keys(adaptedDays).length === 0
-        ? base
-        : {
-            ...base,
-            schedule: base.schedule.map((w) => adaptedDays[w.day] ?? w),
-            weekly_mileage: Number(
-              base.schedule
-                .map((w) => adaptedDays[w.day] ?? w)
-                .reduce((acc, w) => acc + w.distance_miles, 0)
-                .toFixed(1)
-            ),
-          };
-    // Automated Hard Recovery Gate: Force Rest Day (0 mi) today if HRV < baseline_low or sleep < 5.5h
-    // Final pass: one mileage sum per card, correct post-race labels, weekly total from the 7 cards
-    return finalizePlanSchedule(enforceRecoveryGate(withAdapted, health, getTodayDayName()), targetRace);
-  }, [aiGeneratedPlan, planFocus, zones, targetRace, adaptedDays, health]);
+    const baseTemplate = generateTrainingPlan(planFocus, zones, targetRace);
+    const matchesAiPlan = Boolean(
+      aiGeneratedPlan && (!aiGeneratedPlan.focus_id || aiGeneratedPlan.focus_id === planFocus)
+    );
+    const activeSource = matchesAiPlan && aiGeneratedPlan ? aiGeneratedPlan : baseTemplate;
+
+    const mergedByDay = new Map<string, DailyWorkout>();
+    for (const w of baseTemplate.schedule) {
+      const dKey = normalizeDayName(w.day, w.day);
+      mergedByDay.set(dKey, { ...w, day: dKey });
+    }
+    if (matchesAiPlan && aiGeneratedPlan) {
+      for (const w of aiGeneratedPlan.schedule) {
+        const dKey = normalizeDayName(w.day, w.day);
+        mergedByDay.set(dKey, { ...w, day: dKey });
+      }
+    }
+    for (const [dRaw, w] of Object.entries(adaptedDays)) {
+      if (w) {
+        const dKey = normalizeDayName(w.day || dRaw, dRaw);
+        const keepPinned = Boolean(
+          w.is_pinned || w.user_customized || (w.ai_generated && !/HRV Adaptive/i.test(w.name))
+        );
+        mergedByDay.set(dKey, {
+          ...w,
+          day: dKey,
+          ...(keepPinned ? { is_pinned: true, user_customized: true } : {}),
+        });
+      }
+    }
+    for (const [dRaw, w] of Object.entries(customizedDays)) {
+      if (w) {
+        const dKey = normalizeDayName(w.day || dRaw, dRaw);
+        mergedByDay.set(dKey, { ...w, day: dKey, is_pinned: true, user_customized: true });
+      }
+    }
+
+    const mergedSchedule = DAYS_OF_WEEK.map((d) => mergedByDay.get(d)).filter(
+      (w): w is DailyWorkout => Boolean(w)
+    );
+    const remainingSchedule = filterRemainingSchedule(mergedSchedule, todayName);
+    const gated = enforceRecoveryGate(
+      { ...activeSource, focus_id: planFocus, schedule: remainingSchedule },
+      health,
+      todayName,
+      {
+        honorExplicitIntensity: Boolean(
+          matchesAiPlan && (aiGeneratedPlan as { honor_explicit_intensity?: boolean } | null)?.honor_explicit_intensity
+        ),
+      }
+    );
+    return finalizePlanSchedule(gated, targetRace, {
+      todayDay: todayName,
+      remainingOnly: true,
+      maxAutoRest:
+        matchesAiPlan && (aiGeneratedPlan as { no_rest_days?: boolean } | null)?.no_rest_days
+          ? 0
+          : undefined,
+    });
+  }, [aiGeneratedPlan, planFocus, zones, targetRace, adaptedDays, customizedDays, health, todayName]);
 
   const handleSelectCourse = (courseId: string) => {
     setSelectedCourseId(courseId);
@@ -975,7 +1049,121 @@ export default function App() {
     }));
   };
 
-  // Generate full 7-day AI training plan from synced watch data & PRs
+  // Apply and persist a customized or modified single-day workout across customizedDays, focus overrides, AI plan, and user storage
+  const applyDayWorkoutOverride = useCallback(
+    (day: string, workout: DailyWorkout, targetFocusId: TrainingFocusId = planFocus) => {
+      const normDay = normalizeDayName(day, todayName);
+      const stamped: DailyWorkout = {
+        ...workout,
+        day: normDay,
+        is_pinned: true,
+        user_customized: true,
+      };
+      setCustomizedDays((prev) => ({
+        ...prev,
+        [normDay]: stamped,
+      }));
+      setAdaptedDaysByFocus((prev) => {
+        const nextForFocus = {
+          ...(prev[targetFocusId] ?? {}),
+          [normDay]: stamped,
+        };
+        if (currentUser) {
+          saveUserWorkouts(currentUser.id, targetFocusId, nextForFocus);
+        }
+        return {
+          ...prev,
+          [targetFocusId]: nextForFocus,
+        };
+      });
+      setAiGeneratedPlan((prev) => {
+        if (!prev) return prev;
+        const exists = prev.schedule.some((w) => normalizeDayName(w.day, '') === normDay);
+        const updatedSchedule = exists
+          ? prev.schedule.map((w) => (normalizeDayName(w.day, '') === normDay ? stamped : w))
+          : [...prev.schedule, stamped];
+        const sliced = slicePlanToRemainingDays({ ...prev, schedule: updatedSchedule }, todayName);
+        return { ...prev, ...sliced };
+      });
+    },
+    [planFocus, todayName, currentUser]
+  );
+
+  const handleResetDay = useCallback(
+    (day: string) => {
+      const normDay = normalizeDayName(day, todayName);
+      setCustomizedDays((prev) => {
+        const next = { ...prev };
+        delete next[normDay];
+        return next;
+      });
+      setAdaptedDaysByFocus((prev) => {
+        const nextForFocus = { ...(prev[planFocus] ?? {}) };
+        delete nextForFocus[normDay];
+        if (currentUser) {
+          saveUserWorkouts(currentUser.id, planFocus, nextForFocus);
+        }
+        return {
+          ...prev,
+          [planFocus]: nextForFocus,
+        };
+      });
+      notify(`Reset ${normDay} back to plan default.`, 'info');
+    },
+    [planFocus, todayName, currentUser, notify]
+  );
+
+  const handleToggleDayRest = useCallback(
+    (workout: DailyWorkout) => {
+      const normDay = normalizeDayName(workout.day, todayName);
+      if (workout.workout_type === 'rest') {
+        const runWorkout: DailyWorkout = {
+          day: normDay,
+          name: 'Easy Aerobic Base Run',
+          workout_type: 'easy',
+          warmup_miles: 0.5,
+          main_miles: 3.0,
+          cooldown_miles: 0.5,
+          distance_miles: 4.0,
+          pace_target: `${zones.easy.label} (Conversational Aerobic)`,
+          hr_cap: '135–152 bpm',
+          description:
+            '• Warmup: 0.5 mi gentle jog.\n• Main Set: 3.0 mi comfortable aerobic miles.\n• Cooldown: 0.5 mi easy walk + mobility.',
+          injury_prevention_note: 'Athlete-converted active day replacing rest.',
+          ai_generated: false,
+          is_pinned: true,
+          user_customized: true,
+          adaptation_reason: `Athlete converted ${normDay} from Rest Day to 4.0 mi Easy Run.`,
+        };
+        applyDayWorkoutOverride(normDay, runWorkout);
+        notify(`${normDay} changed from Rest to 4.0 mi Easy Run.`, 'success');
+      } else {
+        const restWorkout: DailyWorkout = {
+          day: normDay,
+          name: 'Rest & Mobility Day',
+          workout_type: 'rest',
+          warmup_miles: 0,
+          main_miles: 0,
+          cooldown_miles: 0,
+          distance_miles: 0,
+          pace_target: 'Off (Full Rest)',
+          hr_cap: 'Rest',
+          description:
+            '• Warmup: Off.\n• Main Set: Full rest from running — optional 15 min light mobility.\n• Cooldown: Prioritize hydration & sleep.',
+          injury_prevention_note: 'Athlete-selected rest day for dedicated recovery.',
+          ai_generated: false,
+          is_pinned: true,
+          user_customized: true,
+          adaptation_reason: `Athlete set ${normDay} as Rest Day.`,
+        };
+        applyDayWorkoutOverride(normDay, restWorkout);
+        notify(`${normDay} set to Rest Day.`, 'info');
+      }
+    },
+    [todayName, zones, applyDayWorkoutOverride, notify]
+  );
+
+  // Generate full remaining-week AI training plan from synced watch data & PRs (respects remaining days & customized/pinned overrides)
   const handleGenerateAiPlan = async (customGoal: string, focusOverride?: TrainingFocusId) => {
     const targetFocus = focusOverride ?? planFocus;
     if (focusOverride && focusOverride !== planFocus) {
@@ -992,7 +1180,10 @@ export default function App() {
           focus_id: targetFocus,
           focus_label: TRAINING_FOCUS_LABELS[targetFocus],
           custom_goal: customGoal,
+          today_day: todayName,
           target_race: targetRace,
+          customized_days: customizedDays,
+          pinned_workouts: Object.values(customizedDays),
           activities: activities.slice(0, 14),
           health,
           fitness,
@@ -1000,13 +1191,29 @@ export default function App() {
           prs: runnerEfforts,
         }),
       });
-      const data = (await res.json()) as { plan?: TrainingPlan; error?: string };
+      const data = (await res.json()) as {
+        plan?: TrainingPlan & { honor_explicit_intensity?: boolean; no_rest_days?: boolean };
+        error?: string;
+      };
       if (!res.ok || !data.plan) {
         throw new Error(data.error || `Failed to generate AI plan (HTTP ${res.status})`);
       }
-      setAiGeneratedPlan(data.plan);
-      setAdaptedDaysByFocus((prev) => ({ ...prev, [targetFocus]: {} }));
-      notify(`Generated AI 7-day plan: ${data.plan.title} (${data.plan.weekly_mileage} mpw).`, 'success');
+      const sliced = slicePlanToRemainingDays(data.plan, todayName);
+      setAiGeneratedPlan({
+        ...data.plan,
+        ...sliced,
+        focus_id: targetFocus,
+      } as TrainingPlan);
+      setAdaptedDaysByFocus((prev) => {
+        const currentFocusOverrides = prev[targetFocus] ?? {};
+        const preservedPinned = Object.fromEntries(
+          Object.entries(currentFocusOverrides).filter(
+            ([k, w]) => w?.is_pinned || w?.user_customized || customizedDays[normalizeDayName(k, '')]
+          )
+        );
+        return { ...prev, [targetFocus]: preservedPinned };
+      });
+      notify(`Generated remaining-week plan: ${sliced.title} (${sliced.weekly_mileage} mi remaining).`, 'success');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to generate AI plan';
       setAiPlanError(msg);
@@ -1016,17 +1223,19 @@ export default function App() {
     }
   };
 
-  // Generate a single custom AI workout for a specific day
+  // Generate or modify a single custom AI workout for a specific day (with pinned persistence & client fallback)
   const handleGenerateSingleWorkout = async (day: string, goalPrompt: string) => {
+    const requestedNormDay = normalizeDayName(day, todayName);
     setAiWorkoutLoading(true);
-    setAiWorkoutDay(day);
+    setAiWorkoutDay(requestedNormDay);
     setAiPlanError(null);
     try {
       const res = await fetch('/api/ai/generate-workout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          day,
+          day: requestedNormDay,
+          today_day: todayName,
           goal_prompt: goalPrompt,
           activities: activities.slice(0, 5),
           health,
@@ -1037,25 +1246,64 @@ export default function App() {
             title: trainingPlan.title,
             weekly_mileage: trainingPlan.weekly_mileage,
             target_race: targetRace,
+            schedule: trainingPlan.schedule,
           },
         }),
       });
       const data = (await res.json()) as { workout?: DailyWorkout; error?: string };
+      let resolvedWorkout: DailyWorkout;
       if (!res.ok || !data.workout) {
-        throw new Error(data.error || `Failed to build workout (HTTP ${res.status})`);
+        const parsedLocal = parseDayTargetedPrompt(goalPrompt, requestedNormDay, zones);
+        resolvedWorkout = {
+          day: parsedLocal.day,
+          name: parsedLocal.name,
+          workout_type: parsedLocal.workout_type,
+          distance_miles: parsedLocal.distance_miles,
+          warmup_miles: parsedLocal.warmup_miles,
+          main_miles: parsedLocal.main_miles,
+          cooldown_miles: parsedLocal.cooldown_miles,
+          pace_target: parsedLocal.pace_target,
+          hr_cap: parsedLocal.hr_cap,
+          description: parsedLocal.description,
+          injury_prevention_note: parsedLocal.injury_prevention_note,
+          ai_generated: true,
+          is_pinned: true,
+          user_customized: true,
+          adaptation_reason: parsedLocal.reason,
+        };
+      } else {
+        const targetDay = normalizeDayName(data.workout.day || requestedNormDay, requestedNormDay);
+        resolvedWorkout = {
+          ...data.workout,
+          day: targetDay,
+          ai_generated: true,
+          is_pinned: true,
+          user_customized: true,
+        };
       }
-      setAdaptedDaysByFocus((prev) => ({
-        ...prev,
-        [planFocus]: {
-          ...(prev[planFocus] ?? {}),
-          [day]: data.workout!,
-        },
-      }));
-      notify(`Built AI workout for ${day}: ${data.workout.name} (${data.workout.distance_miles} mi).`, 'success');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to create AI workout';
-      setAiPlanError(msg);
-      notify(msg, 'error');
+      applyDayWorkoutOverride(resolvedWorkout.day, resolvedWorkout);
+      notify(`Updated ${resolvedWorkout.day}: ${resolvedWorkout.name} (${resolvedWorkout.distance_miles} mi).`, 'success');
+    } catch {
+      const parsedLocal = parseDayTargetedPrompt(goalPrompt, requestedNormDay, zones);
+      const fallbackWorkout: DailyWorkout = {
+        day: parsedLocal.day,
+        name: parsedLocal.name,
+        workout_type: parsedLocal.workout_type,
+        distance_miles: parsedLocal.distance_miles,
+        warmup_miles: parsedLocal.warmup_miles,
+        main_miles: parsedLocal.main_miles,
+        cooldown_miles: parsedLocal.cooldown_miles,
+        pace_target: parsedLocal.pace_target,
+        hr_cap: parsedLocal.hr_cap,
+        description: parsedLocal.description,
+        injury_prevention_note: parsedLocal.injury_prevention_note,
+        ai_generated: true,
+        is_pinned: true,
+        user_customized: true,
+        adaptation_reason: parsedLocal.reason,
+      };
+      applyDayWorkoutOverride(fallbackWorkout.day, fallbackWorkout);
+      notify(`Updated ${fallbackWorkout.day}: ${fallbackWorkout.name} (${fallbackWorkout.distance_miles} mi).`, 'success');
     } finally {
       setAiWorkoutLoading(false);
       setAiWorkoutDay(null);
@@ -1081,6 +1329,19 @@ export default function App() {
         headers.Authorization = `Bearer ${garmlinkSessionRef.current}`;
       }
 
+      const planSnapshot = {
+        focus_id: planFocus,
+        title: trainingPlan.title,
+        weekly_mileage: trainingPlan.weekly_mileage,
+        schedule: trainingPlan.schedule.map((w) => ({
+          day: w.day,
+          name: w.name,
+          workout_type: w.workout_type,
+          distance_miles: w.distance_miles,
+          pace_target: w.pace_target,
+        })),
+      };
+
       const res = await fetch('/api/ai/coach', {
         method: 'POST',
         headers,
@@ -1090,7 +1351,7 @@ export default function App() {
             .filter((m) => m.id !== 'welcome' && !m.error)
             .map((m) => ({ role: m.role, content: m.content })),
           context: {
-            today: getTodayDayName(),
+            today: todayName,
             garmlink_connected: garmlink.connected,
             synced_activities_count: activities.length,
             recent_activities: activities.slice(0, 12),
@@ -1103,16 +1364,10 @@ export default function App() {
               PRESET_COURSES.find((c) => c.course_id === selectedCourseId)?.name ?? 'Custom',
             race_schedule: { date: raceDate, time: raceTime, weather: syncedWeather },
             conditions,
-            training_plan: {
-              title: trainingPlan.title,
-              weekly_mileage: trainingPlan.weekly_mileage,
-              schedule: trainingPlan.schedule.map((w) => ({
-                day: w.day,
-                name: w.name,
-                distance_miles: w.distance_miles,
-                pace_target: w.pace_target,
-              })),
-            },
+            target_race: targetRace,
+            customized_days: customizedDays,
+            current_plan: planSnapshot,
+            training_plan: planSnapshot,
           },
         }),
       });
@@ -1132,31 +1387,31 @@ export default function App() {
 
       for (const tc of data.tool_calls ?? []) {
         if (tc.name === 'replace_workout_day') {
-          const day = String(tc.args.day || getTodayDayName());
+          const day = normalizeDayName(String(tc.args.day || todayName), todayName);
+          const wType = (tc.args.workout_type as WorkoutType) || 'easy';
           const updated: DailyWorkout = {
             day,
             name: String(tc.args.name || 'AI Workout'),
-            workout_type: (tc.args.workout_type as WorkoutType) || 'easy',
-            distance_miles: Number(tc.args.distance_miles ?? 3.0),
+            workout_type: wType,
+            distance_miles: Number(tc.args.distance_miles ?? (wType === 'rest' ? 0 : 4.0)),
+            warmup_miles: tc.args.warmup_miles != null ? Number(tc.args.warmup_miles) : undefined,
+            main_miles: tc.args.main_miles != null ? Number(tc.args.main_miles) : undefined,
+            cooldown_miles: tc.args.cooldown_miles != null ? Number(tc.args.cooldown_miles) : undefined,
             pace_target: String(tc.args.pace_target || zones.easy.label),
             hr_cap: String(tc.args.hr_cap || '< 145 bpm'),
             description: String(tc.args.description || ''),
             injury_prevention_note: String(tc.args.injury_prevention_note || ''),
             ai_generated: true,
-            adaptation_reason: String(tc.args.reason || 'Created by AI Coach'),
+            is_pinned: true,
+            user_customized: true,
+            adaptation_reason: String(tc.args.reason || 'Updated by AI Coach'),
           };
-          setAdaptedDaysByFocus((prev) => ({
-            ...prev,
-            [planFocus]: {
-              ...(prev[planFocus] ?? {}),
-              [day]: updated,
-            },
-          }));
+          applyDayWorkoutOverride(day, updated);
           appliedLabels.push(`Updated ${day}: ${updated.name} (${updated.distance_miles} mi)`);
         } else if (tc.name === 'schedule_race_taper') {
           const race_name = String(tc.args.race_name || 'Target Race');
           const race_dist = String(tc.args.race_dist || '5K');
-          const race_day = String(tc.args.race_day || 'Thursday');
+          const race_day = normalizeDayName(String(tc.args.race_day || 'Thursday'), 'Thursday');
           setAiGeneratedPlan(null);
           setTargetRace({ name: race_name, dist: race_dist, day: race_day });
           appliedLabels.push(`Scheduled race-week taper for ${race_name} (${race_dist}) on ${race_day}`);
@@ -1550,19 +1805,29 @@ export default function App() {
                 focus={planFocus}
                 plan={trainingPlan}
                 targetRace={targetRace}
-                hasCustomAiPlan={Boolean(aiGeneratedPlan) || Object.keys(adaptedDays).length > 0}
+                hasCustomAiPlan={
+                  Boolean(aiGeneratedPlan) ||
+                  Object.keys(adaptedDays).length > 0 ||
+                  Object.keys(customizedDays).length > 0
+                }
                 activities={displayActivities}
                 health={health}
                 aiPlanLoading={aiPlanLoading}
                 aiWorkoutLoading={aiWorkoutLoading}
                 aiWorkoutDay={aiWorkoutDay}
                 aiError={aiPlanError}
+                todayDay={todayName}
+                zones={zones}
+                customizedDays={customizedDays}
                 onChangeFocus={(next) => {
                   setPlanFocus(next);
                   setAiGeneratedPlan(null);
                 }}
                 onGenerateAiPlan={(goal, focusOverride) => void handleGenerateAiPlan(goal, focusOverride)}
                 onGenerateSingleWorkout={(day, goal) => void handleGenerateSingleWorkout(day, goal)}
+                onSaveCustomWorkout={(day, workout) => applyDayWorkoutOverride(day, workout)}
+                onToggleDayRest={handleToggleDayRest}
+                onResetDay={handleResetDay}
                 onSetTargetRace={(race) => {
                   setAiGeneratedPlan(null);
                   setTargetRace(race);
@@ -1577,6 +1842,7 @@ export default function App() {
                 }}
                 onResetToBasePlan={() => {
                   setAiGeneratedPlan(null);
+                  setCustomizedDays({});
                   setAdaptedDaysByFocus((prev) => ({
                     ...prev,
                     [planFocus]: {},
@@ -1710,6 +1976,7 @@ export default function App() {
             tools_called: [],
             last_synced_at: null,
           });
+          setCustomizedDays({});
           setAdaptedDaysByFocus({
             track_mid: {},
             track_long: {},

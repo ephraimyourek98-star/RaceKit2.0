@@ -4,6 +4,7 @@ import type {
   TrainingFocusId,
   TrainingPlan,
   TrainingZones,
+  WorkoutType,
 } from './types';
 
 export const DAYS_OF_WEEK = [
@@ -15,6 +16,129 @@ export const DAYS_OF_WEEK = [
   'Saturday',
   'Sunday',
 ] as const;
+
+const DAY_ABBREV_MAP: Array<[RegExp, (typeof DAYS_OF_WEEK)[number]]> = [
+  [/^mon(?:day)?$/i, 'Monday'],
+  [/^tue(?:s|sday)?$/i, 'Tuesday'],
+  [/^wed(?:nesday)?$/i, 'Wednesday'],
+  [/^thu(?:r|rs|rsday)?$/i, 'Thursday'],
+  [/^fri(?:day)?$/i, 'Friday'],
+  [/^sat(?:urday)?$/i, 'Saturday'],
+  [/^sun(?:day)?$/i, 'Sunday'],
+];
+
+/** Canonicalize a day name or abbreviation; returns `fallback` when unrecognized. */
+export function normalizeDayName(day?: string | null, fallback = 'Monday'): string {
+  const cleaned = String(day ?? '').trim().replace(/[.,:!?]+$/, '');
+  if (!cleaned) return fallback;
+  for (const [rx, canonical] of DAY_ABBREV_MAP) {
+    if (rx.test(cleaned)) return canonical;
+  }
+  return fallback;
+}
+
+/** Return remaining weekday names from `todayDay` through Sunday. */
+export function getRemainingDaysOfWeek(todayDay: string = getTodayDayName()): string[] {
+  const normalizedToday = normalizeDayName(todayDay, getTodayDayName());
+  const idx = DAYS_OF_WEEK.indexOf(normalizedToday as (typeof DAYS_OF_WEEK)[number]);
+  if (idx < 0) return [...DAYS_OF_WEEK];
+  return DAYS_OF_WEEK.slice(idx);
+}
+
+/** Filter and canonically order a schedule strictly to remaining days starting at `todayDay`. */
+export function filterRemainingSchedule<T extends { day?: string }>(
+  schedule: T[],
+  todayDay: string = getTodayDayName()
+): T[] {
+  if (!Array.isArray(schedule)) return [];
+  const remaining = getRemainingDaysOfWeek(todayDay);
+  const allowed = new Set(remaining);
+  const byDay = new Map<string, T>();
+  for (const item of schedule) {
+    if (!item || !item.day) continue;
+    const canonical = normalizeDayName(item.day, '');
+    if (canonical && allowed.has(canonical)) {
+      byDay.set(canonical, { ...item, day: canonical });
+    }
+  }
+  return remaining.map((d) => byDay.get(d)).filter((item): item is T => Boolean(item));
+}
+
+export interface ScheduleStats {
+  totalMiles: number;
+  activeDays: number;
+  qualityCount: number;
+  raceCount: number;
+  easyRecoveryCount: number;
+  crossTrainCount: number;
+  restCount: number;
+  longestRunMiles: number;
+}
+
+/** Compute weekly summary metrics strictly from the provided visible workout cards. */
+export function computeScheduleStats(schedule: DailyWorkout[]): ScheduleStats {
+  let totalMiles = 0;
+  let activeDays = 0;
+  let qualityCount = 0;
+  let raceCount = 0;
+  let easyRecoveryCount = 0;
+  let crossTrainCount = 0;
+  let restCount = 0;
+  let longestRunMiles = 0;
+
+  for (const w of schedule) {
+    const miles = Number.isFinite(w.distance_miles) ? Math.max(0, w.distance_miles) : 0;
+    if (w.workout_type === 'rest') {
+      restCount += 1;
+      continue;
+    }
+    if (w.workout_type === 'cross_train') {
+      crossTrainCount += 1;
+      activeDays += 1;
+      totalMiles += miles;
+      continue;
+    }
+    if (w.workout_type === 'race') {
+      raceCount += 1;
+      activeDays += 1;
+    } else if (w.workout_type === 'workout') {
+      qualityCount += 1;
+      activeDays += 1;
+    } else {
+      easyRecoveryCount += 1;
+      if (miles > 0) activeDays += 1;
+    }
+    totalMiles += miles;
+    if (w.workout_type !== 'race' && miles > longestRunMiles) {
+      longestRunMiles = miles;
+    }
+  }
+
+  return {
+    totalMiles: Number(totalMiles.toFixed(1)),
+    activeDays,
+    qualityCount,
+    raceCount,
+    easyRecoveryCount,
+    crossTrainCount,
+    restCount,
+    longestRunMiles: Number(longestRunMiles.toFixed(1)),
+  };
+}
+
+/** Slice a training plan strictly to remaining days of the current week and recompute totals. */
+export function slicePlanToRemainingDays(
+  plan: TrainingPlan,
+  todayDay: string = getTodayDayName()
+): TrainingPlan {
+  const schedule = filterRemainingSchedule(plan.schedule, todayDay);
+  const stats = computeScheduleStats(schedule);
+  return {
+    ...plan,
+    schedule,
+    weekly_mileage: stats.totalMiles,
+  };
+}
 
 export const TRAINING_FOCUS_LABELS: Record<TrainingFocusId, string> = {
   track_mid: 'Track Mid-Distance (800m / 1600m / Mile)',
@@ -53,7 +177,19 @@ export function raceDistanceMiles(distLabel: string): number {
  */
 export function normalizeWorkoutMiles(w: DailyWorkout, raceMiles?: number): DailyWorkout {
   if (w.workout_type === 'rest') {
-    return w.distance_miles === 0 ? w : { ...w, distance_miles: 0 };
+    if (
+      w.distance_miles === 0 &&
+      (w.warmup_miles ?? 0) === 0 &&
+      (w.main_miles ?? 0) === 0 &&
+      (w.cooldown_miles ?? 0) === 0
+    ) {
+      return w;
+    }
+    return { ...w, distance_miles: 0, warmup_miles: 0, main_miles: 0, cooldown_miles: 0 };
+  }
+  if (w.workout_type === 'cross_train') {
+    const safeMiles = Number.isFinite(w.distance_miles) ? Math.max(0, Number(w.distance_miles.toFixed(1))) : 0;
+    return safeMiles === w.distance_miles ? w : { ...w, distance_miles: safeMiles };
   }
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   let wu = num(w.warmup_miles);
@@ -96,26 +232,28 @@ export function normalizeWorkoutMiles(w: DailyWorkout, raceMiles?: number): Dail
   return { ...w, warmup_miles: wu!, main_miles: main!, cooldown_miles: cd!, distance_miles: total };
 }
 
-/** Hard cap on automatically scheduled rest days per week (default plans schedule exactly 1). */
-export const MAX_AUTO_REST_DAYS = 2;
+/** Hard cap on automatically scheduled rest days per week (default plans schedule at most 1). */
+export const MAX_AUTO_REST_DAYS = 1;
 
 const AUTO_REST_REASON = /automatic|recovery gate|low recovery/i;
 
 /**
- * Never let templates / the AI planner / the recovery gate stack up 3+ rest days in one week.
- * Rest days the athlete or coach explicitly asked for (they carry a non-automatic adaptation_reason)
- * are always kept. Surplus automatic rest days become short Zone 1–2 recovery shakeouts so weekly
- * volume stays close to target. Mutates `schedule` in place.
+ * Ensure generated/adapted weeks never stack 2+ unpinned rest days (and never override user-pinned
+ * rest days). Excess unpinned rest days become active Zone 1-2 Easy/Recovery runs.
  */
 export function capRestDays(schedule: DailyWorkout[], maxAuto: number = MAX_AUTO_REST_DAYS): void {
   const isRest = (w: DailyWorkout) => w.workout_type === 'rest';
-  const isExplicit = (w: DailyWorkout) => Boolean(w.adaptation_reason) && !AUTO_REST_REASON.test(w.adaptation_reason!);
-  const explicitCount = schedule.filter((w) => isRest(w) && isExplicit(w)).length;
-  const auto = schedule.map((w, i) => ({ w, i })).filter(({ w }) => isRest(w) && !isExplicit(w));
+  const isUserPinned = (w: DailyWorkout) =>
+    Boolean(
+      w.is_pinned ||
+        w.user_customized ||
+        (w.adaptation_reason && !AUTO_REST_REASON.test(w.adaptation_reason))
+    );
+  const explicitCount = schedule.filter((w) => isRest(w) && isUserPinned(w)).length;
+  const auto = schedule.map((w, i) => ({ w, i })).filter(({ w }) => isRest(w) && !isUserPinned(w));
   let allowed = Math.max(0, maxAuto - explicitCount);
   if (auto.length <= allowed) return;
 
-  // Keep the recovery-gate rest first (today's readiness call), then the earliest scheduled rest
   const keepOrder = [...auto].sort(
     (a, b) => Number(Boolean(b.w.adaptation_reason)) - Number(Boolean(a.w.adaptation_reason)) || a.i - b.i
   );
@@ -130,34 +268,41 @@ export function capRestDays(schedule: DailyWorkout[], maxAuto: number = MAX_AUTO
     if (keep.has(i)) continue;
     schedule[i] = {
       day: w.day,
-      name: 'Recovery Shakeout (Zone 1–2)',
-      workout_type: 'recovery',
+      name: maxAuto === 0 ? 'Easy Aerobic Base Run' : 'Recovery Shakeout (Zone 1–2)',
+      workout_type: maxAuto === 0 ? 'easy' : 'recovery',
       warmup_miles: 0.5,
-      main_miles: 1.5,
+      main_miles: maxAuto === 0 ? 2.5 : 2.0,
       cooldown_miles: 0.5,
-      distance_miles: 2.5,
+      distance_miles: maxAuto === 0 ? 3.5 : 3.0,
       pace_target: easyRef?.pace_target ?? 'Very easy, fully conversational',
-      hr_cap: '< 140 bpm (Zone 1–2)',
+      hr_cap: '< 145 bpm (Zone 1–2)',
       description:
-        '• Warmup: 0.5 mi walk-jog.\n• Main Set: 1.5 mi very easy Zone 1–2 shakeout on soft surface. Walk if HR drifts above 140 bpm.\n• Cooldown: 0.5 mi walk + 10 min mobility.',
+        maxAuto === 0
+          ? '• Warmup: 0.5 mi walk-jog.\n• Main Set: 2.5 mi relaxed conversational aerobic miles (no forced rest).\n• Cooldown: 0.5 mi easy walk + mobility.'
+          : '• Warmup: 0.5 mi walk-jog.\n• Main Set: 2.0 mi very easy Zone 1–2 shakeout on soft surface. Walk if HR drifts above 140 bpm.\n• Cooldown: 0.5 mi walk + 10 min mobility.',
       injury_prevention_note:
-        'Replaces an extra rest day: light blood flow speeds recovery without adding load. Skip it only if something hurts.',
+        'Optional rest if fatigued: light aerobic blood flow supports recovery without forcing a zero-mile day.',
     };
   }
 }
 
 /**
  * Final pass applied to whatever plan is rendered (template, AI plan, or coach-edited days):
- * strict per-card mileage, correct labels for days after Race Day, and a recomputed weekly total.
+ * optional remaining-day slicing, strict per-card mileage, post-race labeling, rest-day cap, and weekly total.
  */
 export function finalizePlanSchedule(
   plan: TrainingPlan,
-  targetRace?: { name: string; dist: string; day: string } | null
+  targetRace?: { name: string; dist: string; day: string } | null,
+  options?: { todayDay?: string; remainingOnly?: boolean; maxAutoRest?: number }
 ): TrainingPlan {
-  const raceIdx = plan.schedule.findIndex((w) => w.workout_type === 'race');
+  const sourceSchedule = options?.remainingOnly
+    ? filterRemainingSchedule(plan.schedule, options.todayDay ?? getTodayDayName())
+    : plan.schedule;
+
+  const raceIdx = sourceSchedule.findIndex((w) => w.workout_type === 'race');
   const raceMiles = targetRace?.dist ? raceDistanceMiles(targetRace.dist) : undefined;
 
-  const schedule = plan.schedule.map((w, i) => {
+  const schedule = sourceSchedule.map((w, i) => {
     let next = normalizeWorkoutMiles(w, raceMiles);
     if (raceIdx !== -1 && i > raceIdx && /taper|pre-?race|shakeout/i.test(next.name)) {
       next = {
@@ -173,15 +318,24 @@ export function finalizePlanSchedule(
     return next;
   });
 
-  capRestDays(schedule);
+  capRestDays(schedule, options?.maxAutoRest ?? MAX_AUTO_REST_DAYS);
 
-  const weeklyMileage = Number(schedule.reduce((acc, w) => acc + (Number(w.distance_miles) || 0), 0).toFixed(1));
-  const unchanged = schedule.every((w, i) => w === plan.schedule[i]) && weeklyMileage === plan.weekly_mileage;
-  return unchanged ? plan : { ...plan, schedule, weekly_mileage: weeklyMileage };
+  const stats = computeScheduleStats(schedule);
+  const unchanged =
+    schedule.length === plan.schedule.length &&
+    schedule.every((w, i) => w === plan.schedule[i]) &&
+    stats.totalMiles === plan.weekly_mileage;
+  return unchanged
+    ? plan
+    : {
+        ...plan,
+        schedule,
+        weekly_mileage: stats.totalMiles,
+      };
 }
 
-export function getTodayDayName(): string {
-  const idx = new Date().getDay();
+export function getTodayDayName(referenceDate: Date = new Date()): string {
+  const idx = referenceDate.getDay();
   return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][idx];
 }
 
@@ -933,7 +1087,8 @@ export function shouldEnforceRecoveryGate(health: HealthSnapshot | null | undefi
 export function enforceRecoveryGate(
   plan: TrainingPlan,
   health: HealthSnapshot | null | undefined,
-  todayDay: string = getTodayDayName()
+  todayDay: string = getTodayDayName(),
+  options?: { honorExplicitIntensity?: boolean }
 ): TrainingPlan {
   if (!shouldEnforceRecoveryGate(health)) return plan;
 
@@ -948,12 +1103,31 @@ export function enforceRecoveryGate(
     sleepScore != null && sleepScore < 60 ? `Sleep Score ${sleepScore}/100` : '',
   ].filter(Boolean);
   const reasonDetail = reasonItems.join(', ');
+  const normalizedToday = normalizeDayName(todayDay, getTodayDayName());
 
   const schedule = plan.schedule.map((workout) => {
-    if (workout.day.toLowerCase() === todayDay.toLowerCase()) {
-      if (workout.workout_type === 'race' || workout.workout_type === 'rest') return workout;
+    if (normalizeDayName(workout.day, '') === normalizedToday) {
+      if (
+        workout.workout_type === 'race' ||
+        workout.workout_type === 'rest' ||
+        workout.workout_type === 'cross_train'
+      ) {
+        return workout;
+      }
 
-      // When recovery is subdued, adapt intense sessions or adjust easy runs into an easy recovery run rather than forbidding running
+      // Preserve user-pinned/customized days OR explicit intensity requests (advisory HRV guidance only)
+      if (workout.user_customized || workout.is_pinned || options?.honorExplicitIntensity) {
+        const advisory = `Advisory: ${reasonDetail || 'HRV/sleep below baseline'} — keep warm-up patient and adjust effort by feel.`;
+        const existingNote = workout.injury_prevention_note || '';
+        return existingNote.includes('Advisory:')
+          ? workout
+          : {
+              ...workout,
+              injury_prevention_note: existingNote ? `${existingNote} ${advisory}` : advisory,
+            };
+      }
+
+      // When recovery is subdued on unpinned/default plans, suggest an easy recovery run rather than forcing rest
       const recoveryWorkout: DailyWorkout = {
         day: workout.day,
         name: 'Easy Recovery Run (HRV Adaptive)',
@@ -974,13 +1148,319 @@ export function enforceRecoveryGate(
     return workout;
   });
 
-  const weeklyMileage = Number(
-    schedule.reduce((acc, w) => acc + w.distance_miles, 0).toFixed(1)
-  );
-
+  const stats = computeScheduleStats(schedule);
   return {
     ...plan,
-    weekly_mileage: weeklyMileage,
+    weekly_mileage: stats.totalMiles,
     schedule,
+  };
+}
+
+export interface ParsedDayPromptResult {
+  isTargeted: boolean;
+  day: string;
+  name: string;
+  workout_type: WorkoutType;
+  distance_miles: number;
+  warmup_miles: number;
+  main_miles: number;
+  cooldown_miles: number;
+  pace_target: string;
+  hr_cap: string;
+  description: string;
+  injury_prevention_note: string;
+  reason: string;
+}
+
+const PREPOSITION_DAY_RX =
+  /\b(?:on|for|this|next|to|make|change|set|move|swap|replace|update|edit|give\s+me)\s+(monday|mon|tuesday|tues?|wednesday|wed|thursday|thu(?:rs?)?|friday|fri|saturday|sat|sunday|sun)\b/i;
+const FULL_DAY_RX = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+const SHORT_DAY_RX = /\b(mon|tues?|wed|thurs?|fri|sat|sun)\b/i;
+
+function computeRunBreakdown(
+  totalMiles: number,
+  workoutType: WorkoutType
+): { wu: number; main: number; cd: number; total: number } {
+  if (workoutType === 'rest') return { wu: 0, main: 0, cd: 0, total: 0 };
+  const safe = Math.max(0.5, Number(totalMiles.toFixed(1)));
+  if (workoutType === 'cross_train') {
+    return { wu: 0, main: Number(totalMiles.toFixed(1)), cd: 0, total: Number(totalMiles.toFixed(1)) };
+  }
+  if (workoutType === 'workout' || workoutType === 'race') {
+    if (safe <= 2.5) {
+      const wu = 0.5;
+      const cd = 0.5;
+      const main = Math.max(0.5, Number((safe - wu - cd).toFixed(1)));
+      return { wu, main, cd, total: Number((wu + main + cd).toFixed(1)) };
+    }
+    const wu = safe >= 5 ? 1.5 : 1.0;
+    const cd = safe >= 5 ? 1.0 : 0.5;
+    const main = Math.max(0.5, Number((safe - wu - cd).toFixed(1)));
+    return { wu, main, cd, total: Number((wu + main + cd).toFixed(1)) };
+  }
+  if (safe < 2.5) {
+    return { wu: 0.5, main: Math.max(0.5, Number((safe - 0.5).toFixed(1))), cd: 0, total: Number(safe.toFixed(1)) };
+  }
+  const wu = workoutType === 'long_run' ? 1.0 : 0.5;
+  const cd = 0.5;
+  const main = Math.max(0.5, Number((safe - wu - cd).toFixed(1)));
+  return { wu, main, cd, total: Number((wu + main + cd).toFixed(1)) };
+}
+
+/**
+ * Deterministically parse single-day customization or workout modification prompts into a full
+ * structured DailyWorkout update respecting target day, workout category, and mileage.
+ */
+export function parseDayTargetedPrompt(
+  prompt: string,
+  defaultDay: string = getTodayDayName(),
+  zones?: TrainingZones
+): ParsedDayPromptResult {
+  const raw = String(prompt ?? '').trim();
+  const lower = raw.toLowerCase();
+  const resolvedDefault = normalizeDayName(defaultDay, getTodayDayName());
+
+  let matchedDay: string | null = null;
+  const prepMatch = raw.match(PREPOSITION_DAY_RX);
+  if (prepMatch) {
+    matchedDay = normalizeDayName(prepMatch[1], resolvedDefault);
+  } else if (/\btomorrow\b/i.test(lower)) {
+    const idx = DAYS_OF_WEEK.indexOf(resolvedDefault as (typeof DAYS_OF_WEEK)[number]);
+    matchedDay = DAYS_OF_WEEK[(Math.max(0, idx) + 1) % DAYS_OF_WEEK.length];
+  } else if (/\btoday\b/i.test(lower)) {
+    matchedDay = resolvedDefault;
+  } else {
+    const fullMatch = raw.match(FULL_DAY_RX);
+    if (fullMatch) {
+      matchedDay = normalizeDayName(fullMatch[1], resolvedDefault);
+    } else {
+      const shortMatch = raw.match(SHORT_DAY_RX);
+      if (shortMatch) {
+        matchedDay = normalizeDayName(shortMatch[1], resolvedDefault);
+      }
+    }
+  }
+  const day = matchedDay ?? resolvedDefault;
+
+  // Strip track interval rep syntax like "5x800m" or "1600m" so meters are never read as miles
+  const strippedForMiles = raw
+    .replace(/\b\d+\s*x\s*\d+(?:\.\d+)?\s*(?:m|meters?)?\b/gi, ' ')
+    .replace(/\b(?:100|200|300|400|600|800|1000|1200|1500|1600|2000|3000|3200|5000|10000)\s*m\b/gi, ' ');
+
+  let explicitMiles: number | undefined;
+  const milesMatch = strippedForMiles.match(/(\d+(?:\.\d+)?)\s*(?:miles?|mi\b|m\b)/i);
+  const kmMatch = strippedForMiles.match(/(\d+(?:\.\d+)?)\s*(?:kms?|km\b)/i);
+  if (milesMatch) {
+    const parsed = parseFloat(milesMatch[1]);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 50) explicitMiles = parsed;
+  } else if (kmMatch) {
+    const parsed = parseFloat(kmMatch[1]);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 80) {
+      explicitMiles = Number((parsed * 0.621371).toFixed(1));
+    }
+  }
+
+  const wantsNoRest = /\b(no\s+rest|not\s+a?\s*rest|replace\s+rest|skip\s+rest|active\s+day)\b/i.test(lower);
+  const hasExplicitAction =
+    Boolean(matchedDay) ||
+    explicitMiles !== undefined ||
+    wantsNoRest ||
+    /\b(change|modify|update|make|switch|set|swap|replace|turn|convert|give|today|tomorrow|harder|hard|quality|tempo|threshold|interval|track|speed|repeat|fartlek|long\s+run|recovery|shakeout|rest\s+day|day\s+off|cross[\s-]*train|cycl(?:e|ing)|bike|swim|strength|lift|yoga|row|race|time\s+trial|workout|session)\b/i.test(
+      lower
+    );
+
+  const repMatch = raw.match(/\b(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*(m|meters?|mi|miles?|k|km)?\b/i);
+  const repLabel = repMatch ? `${repMatch[1]}x${repMatch[2]}${repMatch[3] || 'm'}` : '';
+
+  let workoutType: WorkoutType = 'easy';
+  if (!wantsNoRest && /\b(rest(?:\s+day)?|day\s+off|off\s+day|take\s+off|no\s+run)\b/i.test(lower)) {
+    workoutType = 'rest';
+  } else if (
+    /\b(cross[\s-]*train(?:ing)?|cycl(?:e|ing)|bike|biking|swim(?:ming)?|strength|lift(?:ing)?|yoga|row(?:ing)?|elliptical)\b/i.test(
+      lower
+    )
+  ) {
+    workoutType = 'cross_train';
+  } else if (
+    /\b(race(?:\s+day)?|time\s+trial|invitational|meet)\b/i.test(lower) &&
+    !/\b(interval|tempo|threshold|repeat)\b/i.test(lower)
+  ) {
+    workoutType = 'race';
+  } else if (
+    repMatch ||
+    /\b(interval|intervals|track|speed|repeat|repeats|fartlek|vo2|tempo|threshold|lactate|cruise|progression|harder|hard|quality|intense|tougher|workout)\b/i.test(
+      lower
+    )
+  ) {
+    workoutType = 'workout';
+  } else if (/\b(long(?:\s+run)?|endurance)\b/i.test(lower)) {
+    workoutType = 'long_run';
+  } else if (/\b(recovery|shakeout|very\s+easy|light\s+jog)\b/i.test(lower)) {
+    workoutType = 'recovery';
+  }
+
+  const easyPace = zones?.easy?.label || '8:20–9:00/mi';
+  const thresholdPace = zones?.threshold?.label || '6:40–6:55/mi';
+  const intervalPace = zones?.interval?.label || '6:05–6:25/mi';
+  const longPace = zones?.marathon?.label || zones?.easy?.label || '7:55–8:35/mi';
+
+  if (workoutType === 'rest') {
+    return {
+      isTargeted: hasExplicitAction,
+      day,
+      name: 'Rest & Mobility Day',
+      workout_type: 'rest',
+      distance_miles: 0,
+      warmup_miles: 0,
+      main_miles: 0,
+      cooldown_miles: 0,
+      pace_target: 'Off (Full Rest)',
+      hr_cap: 'Rest',
+      description:
+        '• Warmup: Off.\n• Main Set: Full rest from running — optional 15 min light mobility or walk.\n• Cooldown: Prioritize hydration and sleep.',
+      injury_prevention_note: 'Athlete-requested rest day for targeted tissue & nervous system recovery.',
+      reason: `Updated ${day} to a Rest Day per your request.`,
+    };
+  }
+
+  if (workoutType === 'cross_train') {
+    const miles = explicitMiles ?? 0;
+    const minMatch = raw.match(/\b(\d+)\s*(?:min|minute|minutes)\b/i);
+    const durationLabel = minMatch ? `${minMatch[1]} min` : '45 min';
+    const activity = /\bswim/i.test(lower)
+      ? 'Pool Swim / Aqua Jogging'
+      : /\b(strength|lift)/i.test(lower)
+        ? 'Strength & Core Conditioning'
+        : /\byoga/i.test(lower)
+          ? 'Mobility & Yoga Flow'
+          : 'Aerobic Cycling / Cross-Train';
+    return {
+      isTargeted: hasExplicitAction,
+      day,
+      name: `${activity} (${durationLabel})`,
+      workout_type: 'cross_train',
+      distance_miles: miles,
+      warmup_miles: 0,
+      main_miles: miles,
+      cooldown_miles: 0,
+      pace_target: 'Zone 1–2 Low-Impact Effort',
+      hr_cap: '< 145 bpm',
+      description: `• Warmup: 10 min easy dynamic prep.\n• Main Set: ${durationLabel} ${activity.toLowerCase()} maintaining smooth Zone 1–2 aerobic output with zero impact loading.\n• Cooldown: 10 min foam rolling & hip mobility.`,
+      injury_prevention_note:
+        'Builds aerobic mitochondria and joint stability while giving impact structures a low-stress day.',
+      reason: `Updated ${day} to ${activity} (${durationLabel}).`,
+    };
+  }
+
+  if (workoutType === 'race') {
+    const raceMiles = explicitMiles ?? 3.1;
+    const { wu, main, cd, total } = computeRunBreakdown(raceMiles + 2.5, 'race');
+    return {
+      isTargeted: hasExplicitAction,
+      day,
+      name: 'Race Day / Time Trial Effort',
+      workout_type: 'race',
+      distance_miles: explicitMiles != null ? Number((wu + explicitMiles + cd).toFixed(1)) : total,
+      warmup_miles: wu,
+      main_miles: explicitMiles ?? main,
+      cooldown_miles: cd,
+      pace_target: zones?.repetition?.label || zones?.interval?.label || 'Goal Race Pace',
+      hr_cap: 'Race Effort (Max Safe)',
+      description: `• Warmup: ${wu} mi progressive jog + 4x100m strides.\n• Main Set: ${explicitMiles ?? main} mi race effort — commit cleanly from 400m onward.\n• Cooldown: ${cd} mi easy flush jog + fueling.`,
+      injury_prevention_note: 'Complete structured warm-up strides prior to race start to prime neuromuscular firing.',
+      reason: `Scheduled Race Day on ${day}.`,
+    };
+  }
+
+  if (workoutType === 'workout') {
+    const isTrack =
+      Boolean(repMatch) || /\b(interval|intervals|track|speed|repeat|repeats|fartlek|vo2|800m|400m|1000m|1600m)\b/i.test(lower);
+    const defaultTotal = isTrack ? 6.0 : 6.5;
+    const targetTotal = explicitMiles ?? defaultTotal;
+    const { wu, main, cd, total } = computeRunBreakdown(targetTotal, 'workout');
+    const workoutName = isTrack
+      ? repLabel
+        ? `Track Speed Intervals (${repLabel})`
+        : 'Track Speed & VO2 Intervals'
+      : /\b(tempo|threshold|lactate|cruise)\b/i.test(lower)
+        ? 'Lactate Threshold Tempo Workout'
+        : 'Quality Threshold & Progression Workout';
+    const mainSetText = isTrack
+      ? `${main} mi total interval work (${repLabel || '5x800m @ 5K effort'} w/ 400m easy jog recoveries)`
+      : `${main} mi continuous lactate-threshold tempo + steady closing strides`;
+    return {
+      isTargeted: hasExplicitAction,
+      day,
+      name: workoutName,
+      workout_type: 'workout',
+      distance_miles: total,
+      warmup_miles: wu,
+      main_miles: main,
+      cooldown_miles: cd,
+      pace_target: isTrack ? `${intervalPace} (Track / VO2)` : `${thresholdPace} (Threshold)`,
+      hr_cap: isTrack ? '175–188 bpm' : '165–178 bpm',
+      description: `• Warmup: ${wu} mi easy build + A/B skips + 4x80m strides.\n• Main Set: ${mainSetText}.\n• Cooldown: ${cd} mi easy aerobic jog + calves/hamstring mobility.`,
+      injury_prevention_note:
+        'Full progressive warm-up before hitting quality paces; relax shoulders and maintain high cadence.',
+      reason: `Updated ${day} to ${workoutName} (${total} mi) per your request.`,
+    };
+  }
+
+  if (workoutType === 'long_run') {
+    const targetTotal = explicitMiles ?? 10.0;
+    const { wu, main, cd, total } = computeRunBreakdown(targetTotal, 'long_run');
+    return {
+      isTargeted: hasExplicitAction,
+      day,
+      name: 'Aerobic Endurance Long Run',
+      workout_type: 'long_run',
+      distance_miles: total,
+      warmup_miles: wu,
+      main_miles: main,
+      cooldown_miles: cd,
+      pace_target: `${longPace} (Steady Aerobic)`,
+      hr_cap: '145–160 bpm',
+      description: `• Warmup: ${wu} mi gentle relaxed settling miles.\n• Main Set: ${main} mi sustained aerobic cruise, finishing controlled.\n• Cooldown: ${cd} mi easy walk/jog + carb & electrolyte recovery.`,
+      injury_prevention_note: 'Open the first 2 miles patiently so cardiac drift stays controlled late.',
+      reason: `Updated ${day} to ${total} mi Aerobic Long Run.`,
+    };
+  }
+
+  if (workoutType === 'recovery') {
+    const targetTotal = explicitMiles ?? 3.5;
+    const { wu, main, cd, total } = computeRunBreakdown(targetTotal, 'recovery');
+    return {
+      isTargeted: hasExplicitAction,
+      day,
+      name: 'Easy Recovery Shakeout',
+      workout_type: 'recovery',
+      distance_miles: total,
+      warmup_miles: wu,
+      main_miles: main,
+      cooldown_miles: cd,
+      pace_target: `${easyPace} (Zone 1–2)`,
+      hr_cap: '< 140 bpm',
+      description: `• Warmup: ${wu} mi gentle walk-jog.\n• Main Set: ${main} mi light Zone 1–2 recovery miles on soft terrain.\n• Cooldown: ${cd} mi easy walk + mobility.`,
+      injury_prevention_note: 'Prioritize low impact and smooth relaxed turnover; skip strides if tired.',
+      reason: `Updated ${day} to ${total} mi Easy Recovery Run.`,
+    };
+  }
+
+  const targetTotal = explicitMiles ?? 4.5;
+  const { wu, main, cd, total } = computeRunBreakdown(targetTotal, 'easy');
+  return {
+    isTargeted: hasExplicitAction,
+    day,
+    name: 'Easy Aerobic Base Run',
+    workout_type: 'easy',
+    distance_miles: total,
+    warmup_miles: wu,
+    main_miles: main,
+    cooldown_miles: cd,
+    pace_target: `${easyPace} (Conversational Aerobic)`,
+    hr_cap: '135–152 bpm',
+    description: `• Warmup: ${wu} mi relaxed easy jog.\n• Main Set: ${main} mi smooth conversational aerobic miles.\n• Cooldown: ${cd} mi easy jog + calf/hip mobility.`,
+    injury_prevention_note: 'Keep breathing rhythmic and easy enough to speak in full sentences.',
+    reason: `Updated ${day} to ${total} mi Easy Aerobic Run.`,
   };
 }

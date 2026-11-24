@@ -422,43 +422,6 @@ export function WatchSyncView({
 
           {/* Right: Controls & Actions */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* Date Selector Pills */}
-            <div className="flex items-center gap-1 rounded-xl border border-slate-800 bg-slate-900/80 p-0.5 text-xs">
-              <button
-                type="button"
-                onClick={() => setSelectedDate('2026-11-23')}
-                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                  selectedDate === '2026-11-23'
-                    ? 'bg-sky-500 text-slate-950 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Today (Nov 23)
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedDate('2026-11-22')}
-                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                  selectedDate === '2026-11-22'
-                    ? 'bg-sky-500 text-slate-950 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Nov 22
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedDate('2026-11-21')}
-                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                  selectedDate === '2026-11-21'
-                    ? 'bg-sky-500 text-slate-950 font-semibold'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Nov 21
-              </button>
-            </div>
-
             {/* Unit Toggle */}
             <div className="flex items-center rounded-xl border border-slate-800 bg-slate-900/80 p-0.5 text-xs font-semibold">
               <button
@@ -1698,15 +1661,17 @@ export function WatchSyncView({
                 <Moon className="mx-auto h-8 w-8 text-slate-600 mb-2" />
                 <p className="font-semibold text-slate-200">No sleep record logged on {selectedDate}</p>
                 <p className="mt-1">
-                  Watch was not worn overnight. Switch date to <strong>2026-11-23</strong> or <strong>2026-11-22</strong> to review Garmin sleep architecture snapshots.
+                  Watch was not worn overnight. Sync with Garmin Connect or review your rolling 30-day nightly trends below.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setSelectedDate('2026-11-23')}
-                  className="mt-3 rounded-lg bg-sky-500 px-3 py-1.5 font-semibold text-slate-950 hover:bg-sky-400"
-                >
-                  Switch to Nov 23
-                </button>
+                {healthHistory[0]?.date && healthHistory[0].date !== selectedDate && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDate(healthHistory[0].date)}
+                    className="mt-3 rounded-lg bg-sky-500 px-3 py-1.5 font-semibold text-slate-950 hover:bg-sky-400"
+                  >
+                    View Latest Measured Night ({healthHistory[0].date})
+                  </button>
+                )}
               </div>
             )}
           </div>

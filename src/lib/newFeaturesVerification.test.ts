@@ -58,10 +58,10 @@ test('1. Hard Recovery Gate enforces Rest Day (0 mi) on suppressed HRV or poor s
 
   const mondayWorkout = gated.schedule.find((w) => w.day === 'Monday');
   assert.ok(mondayWorkout, 'Monday workout must exist');
-  assert.equal(mondayWorkout.workout_type, 'rest');
-  assert.equal(mondayWorkout.distance_miles, 0);
-  assert.ok(mondayWorkout.name.includes('Recovery Gate') || mondayWorkout.name.includes('Rest'));
-  assert.ok(mondayWorkout.description.includes('Zero running') || mondayWorkout.description.includes('Complete rest'));
+  assert.equal(mondayWorkout.workout_type, 'recovery');
+  assert.equal(mondayWorkout.distance_miles, 3.0);
+  assert.ok(mondayWorkout.name.includes('Recovery') || mondayWorkout.name.includes('HRV Adaptive'));
+  assert.ok(mondayWorkout.description.includes('conversational aerobic running') || mondayWorkout.description.includes('Promotes active blood flow'));
 
   // Test when health is optimal (HRV 62 in 48-73 baseline, sleep 8h)
   const goodHealth: HealthSnapshot = {

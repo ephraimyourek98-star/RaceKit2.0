@@ -363,7 +363,7 @@ export function AiCoachView({
               <div className="flex items-start gap-2">
                 <Activity className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
                 <div className="text-[11px] leading-tight">
-                  <strong className="text-amber-300">Recovery Warning:</strong> Overnight HRV ({health?.hrv_last_night} ms) is {hrvDropMs} ms below your {baselineLow}–{baselineHigh} ms baseline (-33% vs. 7-day avg). Prioritize recovery / easy aerobic work today.
+                  <strong className="text-amber-300">Recovery Advisory:</strong> Overnight HRV ({health?.hrv_last_night} ms) is {hrvDropMs} ms below baseline. You can still run today—keep it easy and aerobic (Zone 1/2, HR &lt; 140 bpm) for active recovery.
                 </div>
               </div>
             </div>

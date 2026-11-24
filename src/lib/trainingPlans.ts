@@ -951,24 +951,25 @@ export function enforceRecoveryGate(
 
   const schedule = plan.schedule.map((workout) => {
     if (workout.day.toLowerCase() === todayDay.toLowerCase()) {
-      if (workout.workout_type === 'race') return workout;
+      if (workout.workout_type === 'race' || workout.workout_type === 'rest') return workout;
 
-      const restWorkout: DailyWorkout = {
+      // When recovery is subdued, adapt intense sessions or adjust easy runs into an easy recovery run rather than forbidding running
+      const recoveryWorkout: DailyWorkout = {
         day: workout.day,
-        name: 'Rest Day (Low Recovery Gate)',
-        workout_type: 'rest',
-        warmup_miles: 0,
-        main_miles: 0,
-        cooldown_miles: 0,
-        distance_miles: 0,
-        pace_target: 'Off — Full Rest',
-        hr_cap: 'Rest',
-        description: `• Warmup: 5–10 min diaphragmatic breathing & down-regulation.\n• Main Set: Complete rest. Zero running due to low recovery gate (${reasonDetail || 'HRV below baseline'}). Focus on 15–20 min light hip mobility, foam rolling, and hydration.\n• Cooldown: Early bedtime and optimal sleep hygiene.`,
-        injury_prevention_note: `Automated Recovery Gate: Running on suppressed recovery (${hrvVal ?? 32} ms HRV) multiplies overuse injury risk by ~2.7x. Rest restores autonomic nervous balance.`,
-        adaptation_reason: `Automatic Rest Day enforced by RaceKit Recovery Gate: ${reasonDetail || 'Suppressed HRV/Sleep'}.`,
+        name: 'Easy Recovery Run (HRV Adaptive)',
+        workout_type: 'recovery',
+        warmup_miles: 0.5,
+        main_miles: 2.0,
+        cooldown_miles: 0.5,
+        distance_miles: 3.0,
+        pace_target: 'Zone 1/2 Easy Recovery',
+        hr_cap: '< 140 bpm',
+        description: `• Warmup: 0.5 mi light jog + dynamic mobility.\n• Main Set: 2.0 mi conversational aerobic running. Keep heart rate strictly under 140 bpm. Promotes active blood flow, lymphatic drainage, and muscle recovery without autonomic strain.\n• Cooldown: 0.5 mi easy walk + light stretching and hydration.`,
+        injury_prevention_note: `Active Recovery: Lower overnight HRV (${hrvVal ?? 32} ms) indicates subdued autonomic readiness, but gentle Zone 1–2 aerobic running promotes circulation and recovery without sympathetic strain.`,
+        adaptation_reason: `Adapted to an Easy Recovery Run (${reasonDetail || 'HRV below baseline'}) so you can run comfortably today.`,
         ai_generated: true,
       };
-      return restWorkout;
+      return recoveryWorkout;
     }
     return workout;
   });

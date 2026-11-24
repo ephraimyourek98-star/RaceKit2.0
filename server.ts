@@ -568,20 +568,26 @@ function applyPlanGuardrails(
 
   if (isPoorRecovery) {
     const todayW = schedule.find((w) => w.day === todayName);
-    // Only auto-rest if today is NOT race day
+    // If today is NOT race day and not already rest, adapt quality sessions to easy recovery run rather than forcing 0 miles
     if (todayW && todayW.workout_type !== 'race') {
-      todayW.workout_type = 'rest';
-      todayW.name = 'Rest & Autonomic Recovery';
-      todayW.distance_miles = 0;
-      todayW.warmup_miles = 0;
-      todayW.main_miles = 0;
-      todayW.cooldown_miles = 0;
-      todayW.pace_target = 'Off';
-      todayW.hr_cap = 'Rest';
-      todayW.description =
-        '• Active Recovery: 20 min foam rolling IT bands, calves, and quads + light hip mobility. Zero running pounding today.\n• Autonomic Repair: Early sleep window and recovery hydration.';
-      todayW.injury_prevention_note = `Overnight HRV (${health.hrv_last_night ?? 'low'} ms) or Sleep Score (${health.sleep_score ?? 'low'}/100) indicates elevated autonomic stress. Non-negotiable tissue repair window.`;
-      todayW.adaptation_reason = 'Automatically converted today to a Rest Day due to low recovery markers.';
+      if (todayW.workout_type === 'workout' || todayW.workout_type === 'long_run') {
+        todayW.workout_type = 'recovery';
+        todayW.name = 'Easy Aerobic Recovery Run (HRV Adaptive)';
+        todayW.distance_miles = 3.0;
+        todayW.warmup_miles = 0.5;
+        todayW.main_miles = 2.0;
+        todayW.cooldown_miles = 0.5;
+        todayW.pace_target = 'Easy Z2 (< 140 bpm)';
+        todayW.hr_cap = '< 140 bpm';
+        todayW.description =
+          '• Warmup: 0.5 mi light jog + dynamic mobility.\n• Main Set: 2.0 mi conversational aerobic running. Keep heart rate strictly under 140 bpm to promote active circulation without autonomic strain.\n• Cooldown: 0.5 mi easy walk/jog + light stretching.';
+        todayW.injury_prevention_note = `Overnight HRV (${health.hrv_last_night ?? 'low'} ms) is below average. Run at conversational aerobic intensity (< 140 bpm) to support active recovery.`;
+        todayW.adaptation_reason = 'Adapted high-intensity session to an Easy Aerobic Recovery Run so you can run while respecting recovery markers.';
+      } else if (todayW.workout_type === 'easy' || todayW.workout_type === 'recovery') {
+        todayW.hr_cap = '< 140 bpm';
+        todayW.injury_prevention_note = `Overnight HRV (${health.hrv_last_night ?? 'low'} ms) is below average. Keep this run strictly aerobic (HR < 140 bpm) to promote cellular recovery.`;
+        todayW.adaptation_reason = 'Preserved scheduled run with gentle aerobic HR cap (< 140 bpm).';
+      }
     }
   }
 
@@ -2764,11 +2770,13 @@ ${
 3. PRE-RACE TAPER: 1 day before any race must NEVER be a hard workout (strictly Pre-Race Shakeout 2.0 mi + 4x100m strides or Rest). 1 day after must be a Recovery Flush (2.0 mi) or Rest.
 4. WORKOUT CREATION: Use replace_workout_day or schedule_race_taper whenever the user asks to modify a workout, add a race, or adjust the plan. Ensure race workouts include warmup and cooldown distances in the description and mileage.
 5. Keep coaching advice sharp, practical, and conversational with exact pace ranges from their VDOT zones.
-6. HARD RECOVERY GATE (AUTO-REST RECOMMENDATION):
-Whenever the athlete's Overnight HRV is below baseline (e.g. HRV < baseline_low, like 32 ms < 48 ms), or sleep is under 5.5 hours, or sleep score is under 60:
-You MUST STRONGLY and UNEQUIVOCALLY recommend a FULL REST DAY (0 miles).
-DO NOT defend, rationalize, or recommend a 4-mile run, easy run, or shakeout when recovery is suppressed.
-Explain directly to the athlete: running on depressed HRV (e.g. 32 ms vs 48–73 ms baseline) and poor sleep blunts training adaptations, impairs autonomic recovery, and dramatically increases overuse injury risk. Recommend full rest (0 mi), hydration, 15 min mobility, and prioritizing sleep tonight.`;
+6. ADAPTIVE RECOVERY GUIDANCE (ATHLETE WANTS TO RUN):
+- NEVER tell the athlete they "cannot run" or forbid them from running if they want to run today.
+- When the athlete's Overnight HRV is below baseline or their 7-day average (or recovery markers are subdued):
+  * If the athlete wants to run, GREEN LIGHT THEM for an easy aerobic recovery run or gentle shakeout (e.g. 2.5–4.0 miles at strictly conversational Easy Zone 2 pace, HR cap < 140–145 bpm).
+  * Explain that gentle, low-intensity aerobic running promotes active blood flow, flushes out muscle stiffness, and aids recovery without placing heavy demands on the autonomic nervous system.
+  * Advise modifying or skipping high-intensity track intervals, hard tempo runs, or heavy anaerobic volume—instead directing that energy into an easy aerobic effort.
+  * Offer full rest only as an optional suggestion if they feel fatigued or sluggish, but never mandate 0 miles or say they aren't allowed to run.`;
 
     const recentHistory = Array.isArray(history) ? history.slice(-8) : [];
     const contents: Array<Record<string, unknown>> = [
